@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/csv"
 	"fmt"
 	"strings"
 	"time"
@@ -90,6 +91,20 @@ func deleteWordBeforePos(s string, pos int) (string, int) {
 	}
 	out := append(r[:start], r[p:]...)
 	return string(out), start
+}
+
+func parseCommaInput(input string) ([]string, error) {
+	r := csv.NewReader(strings.NewReader(input))
+	r.FieldsPerRecord = -1
+	r.TrimLeadingSpace = true
+	fields, err := r.Read()
+	if err != nil {
+		return nil, err
+	}
+	for i := range fields {
+		fields[i] = strings.TrimSpace(fields[i])
+	}
+	return fields, nil
 }
 
 // Update handles the top-level Bubble Tea update dispatch.
@@ -380,8 +395,86 @@ func (m Model) updateDialog(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.dialog = Dialog{}
 				return m, nil
 			}
-			fields := strings.Split(d.Input, ",")
+			fields, perr := parseCommaInput(d.Input)
+			if perr != nil {
+				return m.setStatus("Invalid input: use comma-separated values (quote fields with commas)"), nil
+			}
 			cols := m.colNames(m.activeTbl)
+
+			if m.driver != nil {
+				switch m.driver.Kind() {
+				case db.KindMongoDB:
+					md, ok := m.driver.(*db.MongoDriver)
+					if !ok {
+						m.dialog = Dialog{}
+						return m.setStatus("Internal error: mongo driver mismatch"), nil
+					}
+					vals := make([]string, len(cols))
+					for i := range cols {
+						if i < len(fields) {
+							vals[i] = fields[i]
+						} else {
+							vals[i] = "NULL"
+						}
+					}
+					logEntry := db.QueryLogEntry{
+						Timestamp: time.Now(),
+						Operation: "INSERT",
+						Table:     m.activeTbl,
+						Query:     fmt.Sprintf("MONGO INSERT %s", m.activeTbl),
+					}
+					m.dialog = Dialog{}
+					return m, func() tea.Msg {
+						start := time.Now()
+						n, err := md.InsertDocument(m.ctx, m.activeTbl, cols, vals)
+						logEntry.Duration = time.Since(start)
+						if err != nil {
+							logEntry.Error = err
+							m.queryLog.Add(logEntry)
+							return ErrMsg{Err: err}
+						}
+						logEntry.RowsAffected = n
+						m.queryLog.Add(logEntry)
+						return QueryResult{Affected: n}
+					}
+
+				case db.KindRedis:
+					rd, ok := m.driver.(*db.RedisDriver)
+					if !ok {
+						m.dialog = Dialog{}
+						return m.setStatus("Internal error: redis driver mismatch"), nil
+					}
+					vals := make([]string, len(cols))
+					for i := range cols {
+						if i < len(fields) {
+							vals[i] = fields[i]
+						} else {
+							vals[i] = "NULL"
+						}
+					}
+					logEntry := db.QueryLogEntry{
+						Timestamp: time.Now(),
+						Operation: "INSERT",
+						Table:     m.activeTbl,
+						Query:     fmt.Sprintf("REDIS INSERT %s", m.activeTbl),
+					}
+					m.dialog = Dialog{}
+					return m, func() tea.Msg {
+						start := time.Now()
+						n, err := rd.InsertEntry(m.ctx, m.activeTbl, cols, vals)
+						logEntry.Duration = time.Since(start)
+						if err != nil {
+							logEntry.Error = err
+							m.queryLog.Add(logEntry)
+							return ErrMsg{Err: err}
+						}
+						logEntry.RowsAffected = n
+						m.queryLog.Add(logEntry)
+						return QueryResult{Affected: n}
+					}
+				}
+			}
+
 			placeholders := make([]string, len(cols))
 			args := make([]interface{}, len(cols))
 			valStrs := make([]string, len(cols))
@@ -784,22 +877,26 @@ func (m Model) updateData(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "a":
 		if m.activeTbl != "" && m.activeTbl != "query" && len(m.dataCols) > 0 {
-			if m.driver != nil {
-				switch m.driver.Kind() {
-				case db.KindMongoDB:
-					return m.setStatus("Add row is not supported for MongoDB yet"), nil
-				case db.KindRedis:
-					return m.setStatus("Add row is not supported for Redis yet"), nil
-				}
-			}
 			ph := make([]string, len(m.dataCols))
 			for i := range ph {
 				ph[i] = "NULL"
 			}
+			title := fmt.Sprintf("INSERT INTO %s", m.activeTbl)
+			body := fmt.Sprintf("Columns: %s\nValues (comma-sep):", strings.Join(m.dataCols, ", "))
+			if m.driver != nil {
+				switch m.driver.Kind() {
+				case db.KindMongoDB:
+					title = fmt.Sprintf("INSERT DOCUMENT %s", m.activeTbl)
+					body += "\nTip: values auto-parse (NULL, true/false, numbers, JSON objects/arrays)"
+				case db.KindRedis:
+					title = fmt.Sprintf("ADD ENTRY %s", m.activeTbl)
+					body += "\nTip: key is required; ttl is seconds; use member/score for set/zset"
+				}
+			}
 			m.dialog = Dialog{
 				Kind:  DlgAddRow,
-				Title: fmt.Sprintf("INSERT INTO %s", m.activeTbl),
-				Body:  fmt.Sprintf("Columns: %s\nValues (comma-sep):", strings.Join(m.dataCols, ", ")),
+				Title: title,
+				Body:  body,
 				Input: strings.Join(ph, ","),
 			}
 		}
@@ -951,11 +1048,11 @@ func (m Model) updateQuery(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		q := strings.TrimSpace(m.query)
 		if q != "" {
-			if isDestructiveQuery(q) {
+			if isDestructiveQueryForDriver(m.driver, q) {
 				m.dialog = Dialog{
 					Kind:  DlgConfirmQuery,
 					Title: "EXECUTE QUERY",
-					Body:  fmt.Sprintf("This query may modify data or schema:\n\n  %s\n\nProceed?", q),
+					Body:  fmt.Sprintf("This query/command may modify data or schema:\n\n  %s\n\nProceed?", q),
 					Data:  q,
 				}
 				return m, nil
@@ -1108,6 +1205,48 @@ func (m Model) updateDataMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+func isDestructiveQueryForDriver(d db.Driver, q string) bool {
+	if d == nil {
+		return isDestructiveQuery(q)
+	}
+
+	upper := strings.ToUpper(strings.TrimSpace(q))
+	if upper == "" {
+		return false
+	}
+
+	switch d.Kind() {
+	case db.KindRedis:
+		cmd := upper
+		if i := strings.IndexAny(cmd, " \t\n\r"); i >= 0 {
+			cmd = cmd[:i]
+		}
+		writes := map[string]struct{}{
+			"SET": {}, "DEL": {}, "EXPIRE": {}, "PEXPIRE": {}, "PERSIST": {},
+			"HSET": {}, "HDEL": {}, "RPUSH": {}, "LPUSH": {}, "LSET": {},
+			"LREM": {}, "SADD": {}, "SREM": {}, "ZADD": {}, "ZREM": {},
+			"FLUSHDB": {}, "FLUSHALL": {},
+		}
+		_, ok := writes[cmd]
+		return ok
+
+	case db.KindMongoDB:
+		prefixes := []string{
+			"INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "TRUNCATE",
+			"ATTACH", "DETACH", "REPLACE", "CREATE", "UPSERT",
+		}
+		for _, p := range prefixes {
+			if strings.HasPrefix(upper, p) {
+				return true
+			}
+		}
+		return false
+
+	default:
+		return isDestructiveQuery(q)
+	}
 }
 
 // isDestructiveQuery returns true if the SQL statement is likely to mutate data
