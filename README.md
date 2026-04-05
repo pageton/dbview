@@ -8,6 +8,8 @@ Terminal TUI database viewer for SQLite, MySQL, PostgreSQL, MongoDB, and Redis.
 go install github.com/pageton/dbview/cmd/dbview@latest
 ```
 
+Tagged releases also publish a prebuilt Linux `manylinux2014` archive in GitHub Releases.
+
 Or from the repo root:
 
 ```sh
