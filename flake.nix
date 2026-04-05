@@ -6,11 +6,17 @@
     flake-utils.url = "github:numtide/flake-utils";
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
-    flake-utils.lib.eachDefaultSystem (system:
+  outputs =
+    {
+      self,
+      nixpkgs,
+      flake-utils,
+    }:
+    flake-utils.lib.eachDefaultSystem (
+      system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
-        version = "0.1.0";
+        version = "0.1.4";
       in
       {
         packages.default = pkgs.buildGoModule {
@@ -18,7 +24,10 @@
           inherit version;
           src = ./.;
           vendorHash = "sha256-PiyWlfzdXaVSMxrAtDrpi7sSCYK14A3uENuyBYi5zLE=";
-          ldflags = [ "-s" "-w" ];
+          ldflags = [
+            "-s"
+            "-w"
+          ];
           meta = with pkgs.lib; {
             description = "Terminal TUI database viewer for SQLite, MySQL, PostgreSQL, MongoDB, and Redis";
             license = licenses.mit;
@@ -38,5 +47,6 @@
           type = "app";
           program = "${self.packages.${system}.default}/bin/dbview";
         };
-      });
+      }
+    );
 }

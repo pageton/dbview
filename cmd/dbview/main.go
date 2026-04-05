@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 
@@ -12,7 +14,13 @@ import (
 	"dbview/internal/db"
 )
 
-var version = "0.1.0"
+var version = "0.1.4"
+
+const releaseAPIURL = "https://api.github.com/repos/pageton/dbview/releases/latest"
+
+type latestRelease struct {
+	TagName string `json:"tag_name"`
+}
 
 func main() {
 	args := os.Args[1:]
@@ -25,6 +33,14 @@ func main() {
 	}
 
 	// Parse flags
+	if len(args) == 2 && args[0] == "update" && args[1] == "--check" {
+		if err := checkLatestVersion(); err != nil {
+			fmt.Printf("Error: %v\n", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+
 	dbPath := ""
 	for _, arg := range args {
 		switch arg {
@@ -35,6 +51,10 @@ func main() {
 			fmt.Printf("dbview %s\n", version)
 			os.Exit(0)
 		default:
+			if arg == "update" {
+				fmt.Println("Usage: dbview update --check")
+				os.Exit(1)
+			}
 			if strings.HasPrefix(arg, "-") {
 				fmt.Printf("Unknown flag: %s\n", arg)
 				fmt.Println("Run 'dbview --help' for more information.")
@@ -67,11 +87,52 @@ func main() {
 	}
 }
 
+func checkLatestVersion() error {
+	req, err := http.NewRequest(http.MethodGet, releaseAPIURL, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("User-Agent", "dbview")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("release check failed: %s", resp.Status)
+	}
+
+	var release latestRelease
+	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+		return err
+	}
+	if release.TagName == "" {
+		return fmt.Errorf("latest release did not include a tag")
+	}
+
+	current := version
+	if !strings.HasPrefix(current, "v") {
+		current = "v" + current
+	}
+
+	if release.TagName == current {
+		fmt.Printf("dbview %s is up to date\n", current)
+		return nil
+	}
+
+	fmt.Printf("dbview %s is available (current: %s)\n", release.TagName, current)
+	return nil
+}
+
 func printHelp() {
 	fmt.Print(`dbview - Terminal UI database viewer
 
 USAGE
   dbview <database-path-or-url>
+  dbview update --check
 
 DATABASES
   SQLite       dbview ./mydb.db
@@ -88,6 +149,9 @@ DESCRIPTION
 FLAGS
   -h, --help       Show this help message
   -v, --version    Print version
+
+UPDATE
+  update --check   Check for a newer release on GitHub
 
 KEYBINDINGS
 

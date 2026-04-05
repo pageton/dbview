@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -11,6 +12,33 @@ import (
 	"dbview/internal/table"
 	"dbview/internal/theme"
 )
+
+func keyText(msg tea.KeyMsg) string {
+	if len(msg.Runes) == 0 {
+		return ""
+	}
+	return string(msg.Runes)
+}
+
+func trimLastRune(s string) string {
+	r := []rune(s)
+	if len(r) == 0 {
+		return s
+	}
+	return string(r[:len(r)-1])
+}
+
+func trimLastWord(s string) string {
+	r := []rune(s)
+	end := len(r)
+	for end > 0 && unicode.IsSpace(r[end-1]) {
+		end--
+	}
+	for end > 0 && !unicode.IsSpace(r[end-1]) {
+		end--
+	}
+	return string(r[:end])
+}
 
 // Update handles the top-level Bubble Tea update dispatch.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -234,11 +262,15 @@ func (m Model) updateDialog(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.dialog = Dialog{}
 		case "backspace":
 			if len(d.Input) > 0 {
-				d.Input = d.Input[:len(d.Input)-1]
+				d.Input = trimLastRune(d.Input)
+			}
+		case "alt+backspace", "ctrl+w":
+			if len(d.Input) > 0 {
+				d.Input = trimLastWord(d.Input)
 			}
 		default:
-			if len(msg.String()) == 1 {
-				d.Input += msg.String()
+			if text := keyText(msg); text != "" {
+				d.Input += text
 			}
 		}
 	case DlgExport:
@@ -315,11 +347,15 @@ func (m Model) updateDialog(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.dialog = Dialog{}
 		case "backspace":
 			if len(d.Input) > 0 {
-				d.Input = d.Input[:len(d.Input)-1]
+				d.Input = trimLastRune(d.Input)
+			}
+		case "alt+backspace", "ctrl+w":
+			if len(d.Input) > 0 {
+				d.Input = trimLastWord(d.Input)
 			}
 		default:
-			if len(msg.String()) == 1 {
-				d.Input += msg.String()
+			if text := keyText(msg); text != "" {
+				d.Input += text
 			}
 		}
 	case DlgImportFmt:
@@ -347,11 +383,15 @@ func (m Model) updateDialog(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.dialog = Dialog{}
 		case "backspace":
 			if len(d.Input) > 0 {
-				d.Input = d.Input[:len(d.Input)-1]
+				d.Input = trimLastRune(d.Input)
+			}
+		case "alt+backspace", "ctrl+w":
+			if len(d.Input) > 0 {
+				d.Input = trimLastWord(d.Input)
 			}
 		default:
-			if len(msg.String()) == 1 {
-				d.Input += msg.String()
+			if text := keyText(msg); text != "" {
+				d.Input += text
 			}
 		}
 	case DlgConfirmQuery:
@@ -438,7 +478,7 @@ func (m Model) updateTables(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					}
 				},
 			}
-        }
+		}
 	case "D":
 		m.view = ViewStats
 	case "F":
@@ -792,11 +832,15 @@ func (m Model) updateQuery(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "backspace":
 		if len(m.query) > 0 {
-			m.query = m.query[:len(m.query)-1]
+			m.query = trimLastRune(m.query)
+		}
+	case "alt+backspace", "ctrl+w":
+		if len(m.query) > 0 {
+			m.query = trimLastWord(m.query)
 		}
 	default:
-		if len(msg.String()) == 1 && msg.String() != "/" {
-			m.query += msg.String()
+		if text := keyText(msg); text != "" && text != "/" {
+			m.query += text
 		}
 	}
 	return m, nil
@@ -816,18 +860,22 @@ func (m Model) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "backspace":
 		if len(m.search) > 0 {
-			m.search = m.search[:len(m.search)-1]
+			m.search = trimLastRune(m.search)
+			m = m.refreshTable()
+		}
+	case "alt+backspace", "ctrl+w":
+		if len(m.search) > 0 {
+			m.search = trimLastWord(m.search)
 			m = m.refreshTable()
 		}
 	default:
-		if len(msg.String()) == 1 && msg.String() != "/" {
-			m.search += msg.String()
+		if text := keyText(msg); text != "" && text != "/" {
+			m.search += text
 			m = m.refreshTable()
 		}
 	}
 	return m, nil
 }
-
 
 // --- Query Log handler ---
 
