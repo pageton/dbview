@@ -74,6 +74,7 @@ nix develop
 | `↑↓` / `jk` | Navigate |
 | `enter` | Open table |
 | `s` | View schema |
+| `r` | Reload tables |
 | `x` | Drop table (with confirmation) |
 | `D` | Database stats |
 | `F` | Flush table (with confirmation) |
@@ -98,7 +99,17 @@ nix develop
 | `{` `}` | First/last page |
 | `ctrl+f` | Live filter |
 | `s` | View schema |
+| `r` | Reload data |
 | `/` | SQL query |
+
+### Schema View
+
+| Key | Action |
+|-----|--------|
+| `r` | Reload schema |
+| `d` | Jump to data view |
+| `/` | SQL query |
+| `esc` / `s` | Back to tables |
 
 ### Query View
 
