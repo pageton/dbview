@@ -1,0 +1,676 @@
+package app
+
+import (
+	"bufio"
+	"context"
+	"encoding/csv"
+	"encoding/json"
+	"fmt"
+	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+
+	btable "github.com/charmbracelet/bubbles/table"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/xuri/excelize/v2"
+	"dbview/internal/db"
+	"dbview/internal/table"
+	"dbview/internal/theme"
+)
+
+// Model is the main Bubble Tea model for the app.
+type Model struct {
+	driver     db.Driver
+	ctx        context.Context
+	cancel     context.CancelFunc
+	tables     []string
+	schema     map[string][]db.ColInfo
+	fks        map[string][]db.FKInfo
+	view       ViewMode
+	cursor     int
+	dbPath     string
+	query      string
+	search     string
+	dataTbl    btable.Model
+	activeTbl  string
+	dataCols   []string
+	allRows    [][]string
+	totalRows  int
+	sortCol    int
+	sortAsc    bool
+	affected   int64
+	err        error
+	width      int
+	height     int
+	ready      bool
+	dialog     Dialog
+	status     string
+	page       int
+	pages      int
+	colCursor  int
+	theme      string
+	helpVis    bool
+	queryHist  []string
+	qHistIdx   int
+	spinner    int
+	loading    bool
+	flash      string
+	flashEnd   time.Time
+	dbFileSize string
+	dbFileHash string
+	queryLog   db.QueryLog
+	prevView   ViewMode
+	logCursor  int
+	logExpand  bool
+}
+
+// New creates a new Model by opening the given database.
+func New(dsn string) Model {
+	m := Model{
+		dbPath:     dsn,
+		view:       ViewTables,
+		schema:     make(map[string][]db.ColInfo),
+		fks:        make(map[string][]db.FKInfo),
+		theme:      "dark",
+		width:      80,
+		height:     24,
+		page:       1,
+		qHistIdx:   -1,
+		queryHist:  []string{},
+		dbFileSize: "",
+		dbFileHash: "",
+		queryLog:   db.NewQueryLog(),
+	}
+	m.ctx, m.cancel = context.WithCancel(context.Background())
+
+	driver, err := db.OpenDriver(m.ctx, dsn)
+	if err != nil {
+		m.err = fmt.Errorf("open db: %w", err)
+		return m
+	}
+	m.driver = driver
+
+	tables, err := driver.ListTables(m.ctx)
+	if err != nil {
+		m.err = fmt.Errorf("list tables: %w", err)
+		return m
+	}
+	for _, name := range tables {
+		m.schema[name], _ = driver.LoadSchema(m.ctx, name)
+		m.fks[name], _ = driver.LoadFKs(m.ctx, name)
+	}
+	m.tables = tables
+	m.ready = true
+	m.dbFileSize = m.computeDBSize()
+	m.dbFileHash = m.computeFileHash()
+	return m
+}
+
+// Init returns the initial command.
+func (m Model) Init() tea.Cmd {
+	return doTick()
+}
+
+func doTick() tea.Cmd {
+	return tea.Tick(time.Millisecond*150, func(t time.Time) tea.Msg {
+		return TickMsg(t)
+	})
+}
+
+// --- Helper methods ---
+
+// redactDSN masks the password in a connection string for safe display.
+func redactDSN(dsn string) string {
+	u, err := url.Parse(dsn)
+	if err != nil || u.User == nil {
+		return dsn // SQLite path or unparseable — return as-is
+	}
+	if _, hasPass := u.User.Password(); hasPass {
+		u.User = url.UserPassword(u.User.Username(), "***")
+	}
+	return u.String()
+}
+
+func (m Model) setStatus(s string) Model {
+	m.status = s
+	m.flash = s
+	m.flashEnd = time.Now().Add(3 * time.Second)
+	return m
+}
+
+func (m Model) c() theme.Colors {
+	return theme.Resolve(m.theme)
+}
+
+func (m Model) hasPK(tbl string) bool {
+	return db.HasPK(m.schema[tbl])
+}
+
+func (m Model) colSelectExpr(tbl string) string {
+	return db.ColSelectExpr(m.schema[tbl])
+}
+
+func (m Model) colNames(tbl string) []string {
+	return db.ColNames(m.schema[tbl])
+}
+
+func (m Model) rowCount(tbl string) int {
+	n, err := m.driver.RowCount(m.ctx, tbl)
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+func (m Model) globalRowIdx(cursor int) int {
+	return (m.page-1)*db.PageSize + cursor
+}
+
+func (m Model) calcPages() int {
+	if m.totalRows <= 0 {
+		return 1
+	}
+	p := m.totalRows / db.PageSize
+	if m.totalRows%db.PageSize > 0 {
+		p++
+	}
+	return p
+}
+
+func (m Model) pkWhere(cursor int) (string, []interface{}) {
+	info := m.schema[m.activeTbl]
+	var pkCols []string
+	for _, c := range info {
+		if c.PK {
+			pkCols = append(pkCols, c.Name)
+		}
+	}
+
+	if len(pkCols) == 0 {
+		if cursor >= len(m.allRows) {
+			return "", nil
+		}
+		offset := (m.page - 1) * db.PageSize
+		rowidQ := fmt.Sprintf("SELECT rowid FROM %q LIMIT 1 OFFSET %d", m.activeTbl, offset+cursor)
+		rows, err := m.driver.Query(m.ctx, rowidQ)
+		if err != nil {
+			return "", nil
+		}
+		var rowid interface{}
+		if !rows.Next() {
+			rows.Close()
+			return "", nil
+		}
+		rows.Scan(&rowid)
+		rows.Close()
+		return "rowid = ?", []interface{}{rowid}
+	}
+
+	var conds []string
+	var args []interface{}
+	for _, pk := range pkCols {
+		for i, c := range m.dataCols {
+			if c == pk && cursor < len(m.allRows) && i < len(m.allRows[cursor]) {
+				conds = append(conds, fmt.Sprintf("%q = ?", pk))
+				args = append(args, m.allRows[cursor][i])
+			}
+		}
+	}
+	return strings.Join(conds, " AND "), args
+}
+
+func (m Model) computeFileHash() string {
+	fi, err := os.Stat(m.dbPath)
+	if err != nil {
+		return "0"
+	}
+	return fmt.Sprintf("%.1f KB", float64(fi.Size())/1024)
+}
+
+func (m Model) computeDBSize() string {
+	fi, err := os.Stat(m.dbPath)
+	if err != nil {
+		return "—"
+	}
+	sz := float64(fi.Size())
+	if sz >= 1048576 {
+		return fmt.Sprintf("%.1f MB", sz/1048576)
+	}
+	if sz >= 1024 {
+		return fmt.Sprintf("%.1f KB", sz/1024)
+	}
+	return fmt.Sprintf("%d B", int(sz))
+}
+
+func (m Model) dbSize() string {
+	return m.dbFileSize
+}
+
+func (m *Model) refreshCachedStats() {
+	m.dbFileSize = m.computeDBSize()
+	m.dbFileHash = m.computeFileHash()
+}
+
+func (m Model) filteredRows() [][]string {
+	return table.FilteredRows(m.allRows, m.search)
+}
+
+func (m Model) sortedRows(rows [][]string) [][]string {
+	return table.SortedRows(rows, m.sortCol, m.sortAsc, len(m.dataCols))
+}
+
+func (m Model) buildTable(rows [][]string, cols []string) btable.Model {
+	return table.BuildTable(rows, cols, m.width, m.height, m.sortCol, m.sortAsc, m.c())
+}
+
+func (m Model) refreshTable() Model {
+	rows := m.filteredRows()
+	rows = m.sortedRows(rows)
+	m.dataTbl = m.buildTable(rows, m.dataCols)
+	return m
+}
+
+// --- Clipboard ---
+
+// clipboardTools lists clipboard utilities to try, in order of preference.
+// Supports: xclip (X11), wl-copy (Wayland), pbcopy (macOS), termux-clipboard-set (Android).
+var clipboardTools = []struct {
+	cmd  string
+	args []string
+}{
+	{"xclip", []string{"-selection", "clipboard"}},
+	{"wl-copy", nil},
+	{"pbcopy", nil},
+	{"termux-clipboard-set", nil},
+}
+
+func copyToClipboard(text string) tea.Cmd {
+	return func() tea.Msg {
+		for _, tool := range clipboardTools {
+			path, err := exec.LookPath(tool.cmd)
+			if err != nil {
+				continue
+			}
+			cmd := exec.Command(path, tool.args...)
+			cmd.Stdin = strings.NewReader(text)
+			if err := cmd.Run(); err == nil {
+				return ClipboardMsg{Text: text, OK: true}
+			}
+		}
+		return ClipboardMsg{Text: text, OK: false}
+	}
+}
+
+// --- Data loading ---
+
+func (m Model) loadData(tbl string) tea.Cmd {
+	return func() tea.Msg {
+		cols, data, total, err := m.driver.LoadTableData(m.ctx, tbl, 1, db.PageSize)
+		if err != nil {
+			return ErrMsg{Err: err}
+		}
+		return DataLoaded{Cols: cols, Rows: data, Total: total, TblName: tbl}
+	}
+}
+
+func (m Model) loadPage(tbl string, page int) tea.Cmd {
+	return func() tea.Msg {
+		cols, data, total, err := m.driver.LoadTableData(m.ctx, tbl, page, db.PageSize)
+		if err != nil {
+			return ErrMsg{Err: err}
+		}
+		return DataLoaded{Cols: cols, Rows: data, Total: total, TblName: tbl}
+	}
+}
+
+func (m Model) execQuery(q string) tea.Cmd {
+	return func() tea.Msg {
+		logEntry := db.QueryLogEntry{
+			Timestamp: time.Now(),
+			Operation: "SELECT",
+			Query:     q,
+		}
+		rows, err := m.driver.Query(m.ctx, q)
+		if err == nil {
+			defer rows.Close()
+			cols, _ := rows.Columns()
+			if len(cols) > 0 {
+				data, scanErrs, _ := db.ScanRows(rows, len(cols))
+				logEntry.Duration = time.Since(logEntry.Timestamp)
+				logEntry.RowsAffected = int64(len(data))
+				m.queryLog.Add(logEntry)
+				return QueryResult{Cols: cols, Rows: data, Affected: int64(len(data)), ScanErrs: scanErrs}
+			}
+		}
+		res, execErr := m.driver.Exec(m.ctx, q)
+		logEntry.Duration = time.Since(logEntry.Timestamp)
+		if execErr != nil {
+			logEntry.Error = execErr
+			m.queryLog.Add(logEntry)
+			return ErrMsg{Err: execErr}
+		}
+		n, _ := res.RowsAffected()
+		logEntry.Operation = "EXEC"
+		logEntry.RowsAffected = n
+		m.queryLog.Add(logEntry)
+		return QueryResult{Affected: n}
+	}
+}
+
+// --- Export ---
+
+func (m Model) execExport(fmtType string) tea.Cmd {
+	return func() tea.Msg {
+		cols := m.colNames(m.activeTbl)
+		var total int
+		rows, err := m.driver.Query(m.ctx, fmt.Sprintf("SELECT COUNT(*) FROM %q", m.activeTbl))
+		if err == nil {
+			rows.Next()
+			rows.Scan(&total)
+			rows.Close()
+		}
+
+		base := strings.TrimSuffix(filepath.Base(m.dbPath), filepath.Ext(m.dbPath))
+		fname := base + "_" + filepath.Base(m.activeTbl)
+		fname = strings.ReplaceAll(fname, "..", "")
+		info := m.schema[m.activeTbl]
+
+		switch fmtType {
+		case "csv":
+			return m.exportCSV(fname, cols, total)
+		case "json":
+			return m.exportJSON(fname, cols, total)
+		case "xlsx":
+			return m.exportXLSX(fname, cols, total)
+		case "sql":
+			return m.exportSQL(base, fname, cols, info, total)
+		}
+		return ErrMsg{Err: fmt.Errorf("unknown format")}
+	}
+}
+
+func (m Model) exportCSV(fname string, cols []string, total int) tea.Msg {
+	path := fname + ".csv"
+	f, err := os.Create(path)
+	if err != nil {
+		return ErrMsg{Err: err}
+	}
+	defer f.Close()
+	bw := bufio.NewWriter(f)
+	w := csv.NewWriter(bw)
+	w.Write(cols)
+	exported := 0
+	scanErrs := 0
+	for offset := 0; offset < total; offset += db.PageSize {
+		q := fmt.Sprintf("SELECT %s FROM %q LIMIT %d OFFSET %d", strings.Join(cols, ", "), m.activeTbl, db.PageSize, offset)
+		rows, err := m.driver.Query(m.ctx, q)
+		if err != nil {
+			return ErrMsg{Err: err}
+		}
+		data, se, _ := db.ScanRows(rows, len(cols))
+		rows.Close()
+		scanErrs += se
+		for _, row := range data {
+			w.Write(row)
+			exported++
+		}
+	}
+	w.Flush()
+	bw.Flush()
+	msg := fmt.Sprintf("Exported %d rows to %s", exported, path)
+	if scanErrs > 0 {
+		msg += fmt.Sprintf(" (%d scan errors)", scanErrs)
+	}
+	return NotifyMsg{Msg: msg}
+}
+
+func (m Model) exportJSON(fname string, cols []string, total int) tea.Msg {
+	path := fname + ".json"
+	f, err := os.Create(path)
+	if err != nil {
+		return ErrMsg{Err: err}
+	}
+	defer f.Close()
+	bw := bufio.NewWriter(f)
+	bw.WriteString("[")
+	exported := 0
+	scanErrs := 0
+	first := true
+	for offset := 0; offset < total; offset += db.PageSize {
+		q := fmt.Sprintf("SELECT %s FROM %q LIMIT %d OFFSET %d", strings.Join(cols, ", "), m.activeTbl, db.PageSize, offset)
+		rows, err := m.driver.Query(m.ctx, q)
+		if err != nil {
+			return ErrMsg{Err: err}
+		}
+		data, se, _ := db.ScanRows(rows, len(cols))
+		rows.Close()
+		scanErrs += se
+		for _, row := range data {
+			if !first {
+				bw.WriteString(",\n")
+			}
+			first = false
+			rec := make(map[string]string)
+			for i, col := range cols {
+				if i < len(row) {
+					rec[col] = row[i]
+				}
+			}
+			b, _ := json.Marshal(rec)
+			bw.Write(b)
+			exported++
+		}
+	}
+	bw.WriteString("\n]")
+	bw.Flush()
+	msg := fmt.Sprintf("Exported %d rows to %s", exported, path)
+	if scanErrs > 0 {
+		msg += fmt.Sprintf(" (%d scan errors)", scanErrs)
+	}
+	return NotifyMsg{Msg: msg}
+}
+
+func (m Model) exportXLSX(fname string, cols []string, total int) tea.Msg {
+	path := fname + ".xlsx"
+	f := excelize.NewFile()
+	sheet := "Sheet1"
+	for i, col := range cols {
+		cell, _ := excelize.CoordinatesToCellName(i+1, 1)
+		f.SetCellValue(sheet, cell, col)
+	}
+	exported := 0
+	scanErrs := 0
+	ri := 2
+	for offset := 0; offset < total; offset += db.PageSize {
+		q := fmt.Sprintf("SELECT %s FROM %q LIMIT %d OFFSET %d", strings.Join(cols, ", "), m.activeTbl, db.PageSize, offset)
+		rows, err := m.driver.Query(m.ctx, q)
+		if err != nil {
+			return ErrMsg{Err: err}
+		}
+		data, se, _ := db.ScanRows(rows, len(cols))
+		rows.Close()
+		scanErrs += se
+		for _, row := range data {
+			for ci, val := range row {
+				cell, _ := excelize.CoordinatesToCellName(ci+1, ri)
+				f.SetCellValue(sheet, cell, val)
+			}
+			ri++
+			exported++
+		}
+	}
+	for i := range cols {
+		cn, _ := excelize.ColumnNumberToName(i + 1)
+		f.SetColWidth(sheet, cn, cn, 20)
+	}
+	if err := f.SaveAs(path); err != nil {
+		return ErrMsg{Err: err}
+	}
+	msg := fmt.Sprintf("Exported %d rows to %s", exported, path)
+	if scanErrs > 0 {
+		msg += fmt.Sprintf(" (%d scan errors)", scanErrs)
+	}
+	return NotifyMsg{Msg: msg}
+}
+
+func (m Model) exportSQL(base, fname string, cols []string, info []db.ColInfo, total int) tea.Msg {
+	path := fname + ".sql"
+	f, err := os.Create(path)
+	if err != nil {
+		return ErrMsg{Err: err}
+	}
+	defer f.Close()
+	bw := bufio.NewWriter(f)
+	bw.WriteString(fmt.Sprintf("-- SQLite dump: %s.%s\n\n", base, m.activeTbl))
+	sr, _ := m.driver.Query(m.ctx, fmt.Sprintf("SELECT sql FROM sqlite_master WHERE type='table' AND name=%q", m.activeTbl))
+	if sr != nil {
+		for sr.Next() {
+			var s string
+			if sr.Scan(&s) == nil {
+				bw.WriteString(s + ";\n\n")
+			}
+		}
+		sr.Close()
+	}
+	exported := 0
+	for offset := 0; offset < total; offset += db.PageSize {
+		q := fmt.Sprintf("SELECT %s FROM %q LIMIT %d OFFSET %d", strings.Join(cols, ", "), m.activeTbl, db.PageSize, offset)
+		rows, err := m.driver.Query(m.ctx, q)
+		if err != nil {
+			return ErrMsg{Err: err}
+		}
+		data, _, _ := db.ScanRows(rows, len(cols))
+		rows.Close()
+		for _, row := range data {
+			var cs, vs []string
+			for i, cell := range row {
+				if i < len(cols) {
+					cs = append(cs, fmt.Sprintf("%q", cols[i]))
+					isNum := false
+					if i < len(info) {
+						t := strings.ToUpper(info[i].Type)
+						isNum = strings.Contains(t, "INT") || strings.Contains(t, "REAL") || strings.Contains(t, "FLOA") || strings.Contains(t, "NUM") || strings.Contains(t, "DOUB")
+					}
+					if isNum {
+						if _, e := strconv.ParseFloat(cell, 64); e == nil {
+							vs = append(vs, cell)
+						} else {
+							vs = append(vs, fmt.Sprintf("'%s'", strings.ReplaceAll(cell, "'", "''")))
+						}
+					} else {
+						vs = append(vs, fmt.Sprintf("'%s'", strings.ReplaceAll(cell, "'", "''")))
+					}
+				}
+			}
+			bw.WriteString(fmt.Sprintf("INSERT INTO %q (%s) VALUES (%s);\n", m.activeTbl, strings.Join(cs, ", "), strings.Join(vs, ", ")))
+			exported++
+		}
+	}
+	bw.Flush()
+	return NotifyMsg{Msg: fmt.Sprintf("Exported %d rows to %s", exported, path)}
+}
+
+// --- Import ---
+
+// safeImportPath validates that an import path does not escape the current
+// working directory and resolves to an existing regular file.
+func safeImportPath(path string) (string, error) {
+	cleaned := filepath.Clean(path)
+	if strings.Contains(cleaned, "..") {
+		return "", fmt.Errorf("path must not contain '..': %s", path)
+	}
+	absPath, err := filepath.Abs(cleaned)
+	if err != nil {
+		return "", fmt.Errorf("resolve path: %w", err)
+	}
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return "", fmt.Errorf("stat file: %w", err)
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("path is a directory, not a file: %s", path)
+	}
+	return absPath, nil
+}
+
+func (m Model) execImport(path, format string) tea.Cmd {
+	return func() tea.Msg {
+		safePath, err := safeImportPath(path)
+		if err != nil {
+			return ErrMsg{Err: err}
+		}
+		f, err := os.Open(safePath)
+		if err != nil {
+			return ErrMsg{Err: fmt.Errorf("open file: %w", err)}
+		}
+		defer f.Close()
+
+		var rows [][]string
+		switch format {
+		case "csv":
+			r := csv.NewReader(f)
+			_, err := r.Read()
+			if err != nil {
+				return ErrMsg{Err: fmt.Errorf("read csv header: %w", err)}
+			}
+			for {
+				record, err := r.Read()
+				if err != nil {
+					break
+				}
+				rows = append(rows, record)
+			}
+		case "json":
+			var data []map[string]interface{}
+			dec := json.NewDecoder(f)
+			if err := dec.Decode(&data); err != nil {
+				return ErrMsg{Err: err}
+			}
+			cols := m.colNames(m.activeTbl)
+			for _, rec := range data {
+				var row []string
+				for _, col := range cols {
+					val := ""
+					if v, ok := rec[col]; ok {
+						val = fmt.Sprintf("%v", v)
+					}
+					row = append(row, val)
+				}
+				rows = append(rows, row)
+			}
+		}
+
+		inserted := 0
+		failed := 0
+		cols := m.colNames(m.activeTbl)
+		placeholders := make([]string, len(cols))
+		for i := range placeholders {
+			placeholders[i] = "?"
+		}
+		q := fmt.Sprintf("INSERT INTO %q (%s) VALUES (%s)", m.activeTbl, strings.Join(cols, ", "), strings.Join(placeholders, ", "))
+		for _, row := range rows {
+			args := make([]interface{}, len(cols))
+			for i := range cols {
+				if i < len(row) {
+					args[i] = row[i]
+				} else {
+					args[i] = nil
+				}
+			}
+			if _, err := m.driver.Exec(m.ctx, q, args...); err != nil {
+				failed++
+			} else {
+				inserted++
+			}
+		}
+		msg := fmt.Sprintf("Imported %d rows from %s", inserted, filepath.Base(path))
+		if failed > 0 {
+			msg += fmt.Sprintf(" (%d failed)", failed)
+		}
+		return NotifyMsg{Msg: msg}
+	}
+}
