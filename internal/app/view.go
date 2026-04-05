@@ -323,7 +323,7 @@ func (m Model) renderData() string {
 	if m.activeTbl != "query" && m.pages > 1 {
 		b.WriteString("\n")
 	}
-	helps := []string{"←→ col", "↑↓ scroll", "1-9 sort", "e edit", "x del", "d dup", "a add", "I import", "E export", "c cell", "C row", "[ ] page", "ctrl+f filter", "s schema", "/ sql", "? help", "q quit"}
+	helps := []string{"←→ col", "↑↓ scroll", "1-9 sort", "e edit", "x del", "d dup", "a add", "I import", "E export", "c cell", "C row", "[ ] page", "ctrl+f filter", "r reload", "s schema", "/ sql", "? help", "q quit"}
 	b.WriteString(m.renderHelpBar(helps))
 	return b.String()
 }
@@ -406,7 +406,7 @@ func (m Model) renderSchema() string {
 			}
 		}
 	}
-	b.WriteString(theme.HelpStyle(cl).Render(" esc back • d data • / sql • ? help • q quit"))
+	b.WriteString(theme.HelpStyle(cl).Render(" esc back • d data • r reload • / sql • ? help • q quit"))
 	return b.String()
 }
 

@@ -985,6 +985,12 @@ func (m Model) updateData(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, copyToClipboard(strings.Join(sorted[cursor], " | "))
 		}
 		return m, nil
+	case "r":
+		if m.activeTbl != "" && m.activeTbl != "query" {
+			m.loading = true
+			return m, m.loadData(m.activeTbl)
+		}
+		return m, nil
 	case "[":
 		if m.activeTbl != "query" && m.page > 1 {
 			m.page--
