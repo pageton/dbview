@@ -41,7 +41,7 @@ jobs:
               export PATH="/usr/local/go/bin:${PATH}"
 
               CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-                go build -trimpath \
+                go build -buildvcs=false -trimpath \
                 -ldflags="-s -w -X main.version=${VERSION}" \
                 -o dist/${APP_NAME} ./cmd/dbview
 
@@ -79,7 +79,7 @@ jobs:
           mkdir -p dist
 
           CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 \
-            go build -trimpath \
+            go build -buildvcs=false -trimpath \
             -ldflags="-s -w -X main.version=${VERSION}" \
             -o dist/${APP_NAME} ./cmd/dbview
 
@@ -90,7 +90,7 @@ jobs:
           tar -C dist -czf "dist/${APP_NAME}_${VERSION}_darwin_amd64.tar.gz" "$(basename "${package_dir}")"
 
           CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 \
-            go build -trimpath \
+            go build -buildvcs=false -trimpath \
             -ldflags="-s -w -X main.version=${VERSION}" \
             -o dist/${APP_NAME} ./cmd/dbview
 
@@ -127,7 +127,7 @@ jobs:
           mkdir -p dist
 
           CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
-            go build -trimpath \
+            go build -buildvcs=false -trimpath \
             -ldflags="-s -w -X main.version=${VERSION}" \
             -o dist/${APP_NAME}.exe ./cmd/dbview
 
@@ -164,7 +164,7 @@ jobs:
           mkdir -p dist
 
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
-            go build -trimpath \
+            go build -buildvcs=false -trimpath \
             -ldflags="-s -w -X main.version=${VERSION}" \
             -o dist/${APP_NAME} ./cmd/dbview
 
