@@ -14,6 +14,21 @@ import (
 )
 
 // View renders the current UI view.
+
+// renderInputWithCursor renders text with a block cursor at the given rune position.
+func renderInputWithCursor(text string, cursor int, _ ...bool) string {
+	runes := []rune(text)
+	if cursor < 0 {
+		cursor = 0
+	}
+	if cursor > len(runes) {
+		cursor = len(runes)
+	}
+	before := string(runes[:cursor])
+	after := string(runes[cursor:])
+	return before + "\u2588" + after
+}
+
 func (m Model) View() string {
 	if !m.ready {
 		if m.err != nil {
@@ -509,7 +524,7 @@ func (m Model) renderSearch() string {
 	b.WriteString("\n")
 	b.WriteString(theme.WarnStyle(cl).Render(" Type to filter rows (live search)"))
 	b.WriteString("\n")
-	b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(cl.White)).Render(fmt.Sprintf(" /%s█", m.search)))
+	b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(cl.White)).Render(fmt.Sprintf(" /%s", renderInputWithCursor(m.search, m.searchCursor))))
 	b.WriteString("\n")
 	filtered := m.filteredRows()
 	b.WriteString(theme.DimStyle(cl).Render(fmt.Sprintf(" %d/%d rows match", len(filtered), len(m.allRows))))
@@ -656,7 +671,7 @@ func (m Model) renderDialog() string {
 			lipgloss.JoinVertical(lipgloss.Left,
 				theme.WarnStyle(cl).Bold(true).Render(">> "+d.Title),
 				"", d.Body, "",
-				lipgloss.NewStyle().Foreground(lipgloss.Color(cl.White)).Render("> "+d.Input+"█"),
+				lipgloss.NewStyle().Foreground(lipgloss.Color(cl.White)).Render("> "+renderInputWithCursor(d.Input, d.Cursor)),
 				"", theme.DimStyle(cl).Render("enter confirm • esc cancel"),
 			),
 		)
@@ -679,7 +694,7 @@ func (m Model) renderDialog() string {
 			lipgloss.JoinVertical(lipgloss.Left,
 				theme.WarnStyle(cl).Bold(true).Render("++ "+d.Title),
 				"", d.Body, "",
-				lipgloss.NewStyle().Foreground(lipgloss.Color(cl.White)).Render("> "+d.Input+"█"),
+				lipgloss.NewStyle().Foreground(lipgloss.Color(cl.White)).Render("> "+renderInputWithCursor(d.Input, d.Cursor)),
 				"", theme.DimStyle(cl).Render("enter confirm • esc cancel"),
 			),
 		)
@@ -698,7 +713,7 @@ func (m Model) renderDialog() string {
 			lipgloss.JoinVertical(lipgloss.Left,
 				theme.WarnStyle(cl).Bold(true).Render(">> "+d.Title),
 				"", d.Body, "",
-				lipgloss.NewStyle().Foreground(lipgloss.Color(cl.White)).Render("> "+d.Input+"█"),
+				lipgloss.NewStyle().Foreground(lipgloss.Color(cl.White)).Render("> "+renderInputWithCursor(d.Input, d.Cursor)),
 				"", theme.DimStyle(cl).Render("enter import • esc cancel"),
 			),
 		)

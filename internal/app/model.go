@@ -38,6 +38,7 @@ type Model struct {
 	query       string
 	queryCursor int
 	search      string
+	searchCursor int
 	dataTbl     btable.Model
 	activeTbl   string
 	dataCols    []string

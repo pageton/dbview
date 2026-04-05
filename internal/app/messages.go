@@ -35,11 +35,12 @@ const (
 
 // Dialog holds the state for an active dialog overlay.
 type Dialog struct {
-	Kind  DialogKind
-	Title string
-	Body  string
-	Input string
-	Data  interface{}
+	Kind   DialogKind
+	Title  string
+	Body   string
+	Input  string
+	Cursor int
+	Data   interface{}
 }
 
 // TickMsg is sent on each timer tick for spinner animation.

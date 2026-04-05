@@ -138,6 +138,51 @@ func wordForward(s string, pos int) int {
 	return p
 }
 
+// handleTextInput processes a key event for cursor-aware text editing.
+// Returns the new text, new cursor position, and whether the key was handled.
+func handleTextInput(text string, cursor int, msg tea.KeyMsg) (string, int, bool) {
+	switch msg.String() {
+	case "left":
+		if cursor > 0 {
+			return text, cursor - 1, true
+		}
+		return text, cursor, true
+	case "right":
+		if cursor < runeLen(text) {
+			return text, cursor + 1, true
+		}
+		return text, cursor, true
+	case "home", "ctrl+a":
+		return text, 0, true
+	case "end", "ctrl+e":
+		return text, runeLen(text), true
+	case "ctrl+left":
+		return text, wordBackward(text, cursor), true
+	case "ctrl+right":
+		return text, wordForward(text, cursor), true
+	case "backspace":
+		if cursor > 0 {
+			newText, newCur := deleteRuneBeforePos(text, cursor)
+			return newText, newCur, true
+		}
+		return text, cursor, true
+	case "delete":
+		newText, newCur := deleteRuneAtPos(text, cursor)
+		return newText, newCur, true
+	case "alt+backspace", "ctrl+w":
+		if cursor > 0 {
+			newText, newCur := deleteWordBeforePos(text, cursor)
+			return newText, newCur, true
+		}
+		return text, cursor, true
+	default:
+		if t := keyText(msg); t != "" {
+			return insertAtRunePos(text, cursor, t), cursor + runeLen(t), true
+		}
+	}
+	return text, cursor, false
+}
+
 func parseCommaInput(input string) ([]string, error) {
 	r := csv.NewReader(strings.NewReader(input))
 	r.FieldsPerRecord = -1
@@ -399,17 +444,10 @@ func (m Model) updateDialog(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		case "esc":
 			m.dialog = Dialog{}
-		case "backspace":
-			if len(d.Input) > 0 {
-				d.Input = trimLastRune(d.Input)
-			}
-		case "alt+backspace", "ctrl+w":
-			if len(d.Input) > 0 {
-				d.Input = trimLastWord(d.Input)
-			}
 		default:
-			if text := keyText(msg); text != "" {
-				d.Input += text
+			if newInput, newCur, handled := handleTextInput(d.Input, d.Cursor, msg); handled {
+				d.Input = newInput
+				d.Cursor = newCur
 			}
 		}
 	case DlgExport:
@@ -562,17 +600,10 @@ func (m Model) updateDialog(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		case "esc":
 			m.dialog = Dialog{}
-		case "backspace":
-			if len(d.Input) > 0 {
-				d.Input = trimLastRune(d.Input)
-			}
-		case "alt+backspace", "ctrl+w":
-			if len(d.Input) > 0 {
-				d.Input = trimLastWord(d.Input)
-			}
 		default:
-			if text := keyText(msg); text != "" {
-				d.Input += text
+			if newInput, newCur, handled := handleTextInput(d.Input, d.Cursor, msg); handled {
+				d.Input = newInput
+				d.Cursor = newCur
 			}
 		}
 	case DlgImportFmt:
@@ -598,17 +629,10 @@ func (m Model) updateDialog(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.execImport(path, fmtStr)
 		case "esc":
 			m.dialog = Dialog{}
-		case "backspace":
-			if len(d.Input) > 0 {
-				d.Input = trimLastRune(d.Input)
-			}
-		case "alt+backspace", "ctrl+w":
-			if len(d.Input) > 0 {
-				d.Input = trimLastWord(d.Input)
-			}
 		default:
-			if text := keyText(msg); text != "" {
-				d.Input += text
+			if newInput, newCur, handled := handleTextInput(d.Input, d.Cursor, msg); handled {
+				d.Input = newInput
+				d.Cursor = newCur
 			}
 		}
 	case DlgConfirmQuery:
@@ -776,6 +800,7 @@ func (m Model) updateData(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+f":
 		m.view = ViewSearch
 		m.search = ""
+		m.searchCursor = 0
 		return m, nil
 	case "left", "h":
 		if m.colCursor > 0 {
@@ -801,11 +826,12 @@ func (m Model) updateData(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			displayRow := m.globalRowIdx(cursor) + 1
 			m.dialog = Dialog{
-				Kind:  DlgEdit,
-				Title: fmt.Sprintf("Edit %s.%s (row %d)", m.activeTbl, colName, displayRow),
-				Body:  fmt.Sprintf("Current: %s\nNew value:", oldVal),
-				Input: oldVal,
-				Data:  []int{editCol, cursor},
+				Kind:   DlgEdit,
+				Title:  fmt.Sprintf("Edit %s.%s (row %d)", m.activeTbl, colName, displayRow),
+				Body:   fmt.Sprintf("Current: %s\nNew value:", oldVal),
+				Input:  oldVal,
+				Cursor: len([]rune(oldVal)),
+				Data:   []int{editCol, cursor},
 			}
 		}
 		return m, nil
@@ -938,11 +964,13 @@ func (m Model) updateData(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					body += "\nTip: key is required; ttl is seconds; use member/score for set/zset"
 				}
 			}
+			input := strings.Join(ph, ",")
 			m.dialog = Dialog{
-				Kind:  DlgAddRow,
-				Title: title,
-				Body:  body,
-				Input: strings.Join(ph, ","),
+				Kind:   DlgAddRow,
+				Title:  title,
+				Body:   body,
+				Input:  input,
+				Cursor: len([]rune(input)),
 			}
 		}
 		return m, nil
@@ -1160,25 +1188,20 @@ func (m Model) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
 		m.search = ""
+		m.searchCursor = 0
 		m.view = ViewData
 		m = m.refreshTable()
 		return m, nil
 	case "enter":
 		m.view = ViewData
 		return m, nil
-	case "backspace":
-		if len(m.search) > 0 {
-			m.search = trimLastRune(m.search)
-			m = m.refreshTable()
-		}
-	case "alt+backspace", "ctrl+w":
-		if len(m.search) > 0 {
-			m.search = trimLastWord(m.search)
-			m = m.refreshTable()
-		}
 	default:
-		if text := keyText(msg); text != "" && text != "/" {
-			m.search += text
+		if msg.String() == "/" {
+			return m, nil
+		}
+		if newSearch, newCur, handled := handleTextInput(m.search, m.searchCursor, msg); handled {
+			m.search = newSearch
+			m.searchCursor = newCur
 			m = m.refreshTable()
 		}
 	}
