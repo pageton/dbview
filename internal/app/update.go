@@ -1043,6 +1043,19 @@ func (m Model) updateSchema(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.activeTbl != "" {
 			return m, m.loadData(m.activeTbl)
 		}
+	case "r":
+		if m.activeTbl != "" {
+			schema, err := m.driver.LoadSchema(m.ctx, m.activeTbl)
+			if err != nil {
+				m.err = err
+				return m, nil
+			}
+			m.schema[m.activeTbl] = schema
+			fks, _ := m.driver.LoadFKs(m.ctx, m.activeTbl)
+			m.fks[m.activeTbl] = fks
+			m = m.setStatus(fmt.Sprintf("Schema reloaded for %s", m.activeTbl))
+			return m, doTick()
+		}
 	case "/":
 		m.view = ViewQuery
 		m.query = ""
