@@ -93,6 +93,51 @@ func deleteWordBeforePos(s string, pos int) (string, int) {
 	return string(out), start
 }
 
+func deleteRuneAtPos(s string, pos int) (string, int) {
+	r := []rune(s)
+	p := clampCursor(pos, len(r))
+	if p >= len(r) {
+		return s, p
+	}
+	out := append(r[:p], r[p+1:]...)
+	return string(out), p
+}
+
+func wordBackward(s string, pos int) int {
+	r := []rune(s)
+	p := clampCursor(pos, len(r))
+	if p == 0 {
+		return 0
+	}
+	// Skip trailing whitespace
+	for p > 0 && unicode.IsSpace(r[p-1]) {
+		p--
+	}
+	// Skip word characters
+	for p > 0 && !unicode.IsSpace(r[p-1]) {
+		p--
+	}
+	return p
+}
+
+func wordForward(s string, pos int) int {
+	r := []rune(s)
+	n := len(r)
+	p := clampCursor(pos, n)
+	if p >= n {
+		return n
+	}
+	// Skip current word characters
+	for p < n && !unicode.IsSpace(r[p]) {
+		p++
+	}
+	// Skip following whitespace
+	for p < n && unicode.IsSpace(r[p]) {
+		p++
+	}
+	return p
+}
+
 func parseCommaInput(input string) ([]string, error) {
 	r := csv.NewReader(strings.NewReader(input))
 	r.FieldsPerRecord = -1
@@ -1045,6 +1090,20 @@ func (m Model) updateQuery(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.queryCursor++
 		}
 		return m, nil
+	case "home", "ctrl+a":
+		m.queryCursor = 0
+		return m, nil
+	case "end", "ctrl+e":
+		m.queryCursor = runeLen(m.query)
+		return m, nil
+	case "ctrl+left":
+		m.queryCursor = wordBackward(m.query, m.queryCursor)
+		return m, nil
+	case "ctrl+right":
+		m.queryCursor = wordForward(m.query, m.queryCursor)
+		return m, nil
+	case "delete":
+		m.query, m.queryCursor = deleteRuneAtPos(m.query, m.queryCursor)
 	case "enter":
 		q := strings.TrimSpace(m.query)
 		if q != "" {

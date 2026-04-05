@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"dbview/internal/db"
+	"dbview/internal/highlight"
 	"dbview/internal/table"
 	"dbview/internal/theme"
 )
@@ -481,16 +482,12 @@ func (m Model) renderQuery() string {
 	b.WriteString("\n")
 	b.WriteString(theme.WarnStyle(cl).Render(prompt))
 	b.WriteString("\n")
-	qr := []rune(m.query)
-	cursor := m.queryCursor
-	if cursor < 0 {
-		cursor = 0
+	driverKind := ""
+	if m.driver != nil {
+		driverKind = string(m.driver.Kind())
 	}
-	if cursor > len(qr) {
-		cursor = len(qr)
-	}
-	queryWithCursor := string(qr[:cursor]) + "█" + string(qr[cursor:])
-	b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(cl.White)).Render(fmt.Sprintf(" > %s", queryWithCursor)))
+	highlighted := highlight.Highlight(m.query, m.queryCursor, cl, driverKind)
+	b.WriteString(fmt.Sprintf(" > %s", highlighted))
 	b.WriteString("\n")
 	if m.err != nil {
 		b.WriteString(theme.ErrStyle(cl).Render(fmt.Sprintf(" %v", m.err)))
