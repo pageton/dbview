@@ -43,11 +43,11 @@ jobs:
               CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
                 go build -buildvcs=false -trimpath \
                 -ldflags="-s -w -X main.version=${VERSION}" \
-                -o dist/${APP_NAME} ./cmd/dbview
+                -o dist/${APP_NAME}_${VERSION}_linux_amd64 ./cmd/dbview
 
               package_dir="dist/${APP_NAME}_${VERSION}_linux_amd64"
               mkdir -p "${package_dir}"
-              cp dist/${APP_NAME} "${package_dir}/"
+              cp dist/${APP_NAME}_${VERSION}_linux_amd64 "${package_dir}/${APP_NAME}"
               cp README.md "${package_dir}/"
               tar -C dist -czf "dist/${APP_NAME}_${VERSION}_manylinux2014_x86_64.tar.gz" "$(basename "${package_dir}")"
             '
@@ -56,7 +56,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release-linux-manylinux2014
-          path: dist/*.tar.gz
+          path: |
+            dist/*.tar.gz
+            dist/${{ env.APP_NAME }}_*_linux_amd64
           if-no-files-found: error
 
   build-macos:
@@ -81,22 +83,22 @@ jobs:
           CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 \
             go build -buildvcs=false -trimpath \
             -ldflags="-s -w -X main.version=${VERSION}" \
-            -o dist/${APP_NAME} ./cmd/dbview
+            -o dist/${APP_NAME}_${VERSION}_darwin_amd64 ./cmd/dbview
 
           package_dir="dist/${APP_NAME}_${VERSION}_darwin_amd64"
           mkdir -p "${package_dir}"
-          cp dist/${APP_NAME} "${package_dir}/"
+          cp dist/${APP_NAME}_${VERSION}_darwin_amd64 "${package_dir}/${APP_NAME}"
           cp README.md "${package_dir}/"
           tar -C dist -czf "dist/${APP_NAME}_${VERSION}_darwin_amd64.tar.gz" "$(basename "${package_dir}")"
 
           CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 \
             go build -buildvcs=false -trimpath \
             -ldflags="-s -w -X main.version=${VERSION}" \
-            -o dist/${APP_NAME} ./cmd/dbview
+            -o dist/${APP_NAME}_${VERSION}_darwin_arm64 ./cmd/dbview
 
           package_dir="dist/${APP_NAME}_${VERSION}_darwin_arm64"
           mkdir -p "${package_dir}"
-          cp dist/${APP_NAME} "${package_dir}/"
+          cp dist/${APP_NAME}_${VERSION}_darwin_arm64 "${package_dir}/${APP_NAME}"
           cp README.md "${package_dir}/"
           tar -C dist -czf "dist/${APP_NAME}_${VERSION}_darwin_arm64.tar.gz" "$(basename "${package_dir}")"
 
@@ -104,7 +106,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release-darwin
-          path: dist/*.tar.gz
+          path: |
+            dist/*.tar.gz
+            dist/${{ env.APP_NAME }}_*_darwin_amd64
+            dist/${{ env.APP_NAME }}_*_darwin_arm64
           if-no-files-found: error
 
   build-windows:
@@ -129,11 +134,11 @@ jobs:
           CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
             go build -buildvcs=false -trimpath \
             -ldflags="-s -w -X main.version=${VERSION}" \
-            -o dist/${APP_NAME}.exe ./cmd/dbview
+            -o dist/${APP_NAME}_${VERSION}_windows_amd64.exe ./cmd/dbview
 
           package_dir="dist/${APP_NAME}_${VERSION}_windows_amd64"
           mkdir -p "${package_dir}"
-          cp dist/${APP_NAME}.exe "${package_dir}/"
+          cp dist/${APP_NAME}_${VERSION}_windows_amd64.exe "${package_dir}/${APP_NAME}.exe"
           cp README.md "${package_dir}/"
           (cd dist && zip -rq "${APP_NAME}_${VERSION}_windows_amd64.zip" "$(basename "${package_dir}")")
 
@@ -141,7 +146,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release-windows
-          path: dist/*.zip
+          path: |
+            dist/*.zip
+            dist/${{ env.APP_NAME }}_*_windows_amd64.exe
           if-no-files-found: error
 
   build-linux-arm64:
@@ -166,11 +173,11 @@ jobs:
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
             go build -buildvcs=false -trimpath \
             -ldflags="-s -w -X main.version=${VERSION}" \
-            -o dist/${APP_NAME} ./cmd/dbview
+            -o dist/${APP_NAME}_${VERSION}_linux_arm64 ./cmd/dbview
 
           package_dir="dist/${APP_NAME}_${VERSION}_linux_arm64"
           mkdir -p "${package_dir}"
-          cp dist/${APP_NAME} "${package_dir}/"
+          cp dist/${APP_NAME}_${VERSION}_linux_arm64 "${package_dir}/${APP_NAME}"
           cp README.md "${package_dir}/"
           tar -C dist -czf "dist/${APP_NAME}_${VERSION}_linux_arm64.tar.gz" "$(basename "${package_dir}")"
 
@@ -178,7 +185,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release-linux-arm64
-          path: dist/*.tar.gz
+          path: |
+            dist/*.tar.gz
+            dist/${{ env.APP_NAME }}_*_linux_arm64
           if-no-files-found: error
 
   publish-release:
@@ -200,7 +209,14 @@ jobs:
         run: |
           set -euo pipefail
           cd dist
-          sha256sum *.tar.gz *.zip > checksums.txt
+          sha256sum \
+            *.tar.gz \
+            *.zip \
+            ${APP_NAME}_*_linux_amd64 \
+            ${APP_NAME}_*_linux_arm64 \
+            ${APP_NAME}_*_darwin_amd64 \
+            ${APP_NAME}_*_darwin_arm64 \
+            ${APP_NAME}_*_windows_amd64.exe > checksums.txt
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
@@ -209,4 +225,9 @@ jobs:
           files: |
             dist/*.tar.gz
             dist/*.zip
+            dist/${{ env.APP_NAME }}_*_linux_amd64
+            dist/${{ env.APP_NAME }}_*_linux_arm64
+            dist/${{ env.APP_NAME }}_*_darwin_amd64
+            dist/${{ env.APP_NAME }}_*_darwin_arm64
+            dist/${{ env.APP_NAME }}_*_windows_amd64.exe
             dist/checksums.txt
