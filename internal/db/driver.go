@@ -41,6 +41,8 @@ type Driver interface {
 	LoadTableData(ctx context.Context, table string, page, pageSize int) (cols []string, rows [][]string, total int, err error)
 	// RowCount returns the number of rows in a table.
 	RowCount(ctx context.Context, table string) (int, error)
+	// LoadIndices returns index information for a table.
+	LoadIndices(ctx context.Context, table string) ([]IndexInfo, error)
 }
 
 // DetectDriver determines the driver kind and cleaned DSN from a connection string.

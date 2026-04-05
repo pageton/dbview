@@ -123,6 +123,36 @@ func (d *MongoDriver) LoadFKs(ctx context.Context, table string) ([]FKInfo, erro
 	return nil, nil
 }
 
+func (d *MongoDriver) LoadIndices(ctx context.Context, table string) ([]IndexInfo, error) {
+	coll := d.client.Database(d.dbName).Collection(table)
+	cursor, err := coll.Indexes().List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+	var indices []IndexInfo
+	for cursor.Next(ctx) {
+		var idxDoc struct {
+			Name   string   `bson:"name"`
+			Key    bson.M   `bson:"key"`
+			Unique bool     `bson:"unique"`
+		}
+		if cursor.Decode(&idxDoc) != nil {
+			continue
+		}
+		var cols []string
+		for k := range idxDoc.Key {
+			cols = append(cols, k)
+		}
+		indices = append(indices, IndexInfo{
+			Name:    idxDoc.Name,
+			Columns: cols,
+			Unique:  idxDoc.Unique,
+		})
+	}
+	return indices, nil
+}
+
 func (d *MongoDriver) Query(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error) {
 	return nil, fmt.Errorf("use MongoQuery for MongoDB data access")
 }

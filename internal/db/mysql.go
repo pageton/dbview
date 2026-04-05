@@ -172,3 +172,34 @@ func (d *MySQLDriver) RowCount(ctx context.Context, table string) (int, error) {
 	rows.Close()
 	return n, nil
 }
+
+func (d *MySQLDriver) LoadIndices(ctx context.Context, table string) ([]IndexInfo, error) {
+	rows, err := d.db.QueryContext(ctx,
+		`SELECT s.index_name, s.non_unique, s.column_name
+		 FROM information_schema.statistics s
+		 WHERE s.table_schema = DATABASE() AND s.table_name = ?
+		 ORDER BY s.index_name, s.seq_in_index`, table)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	idxMap := make(map[string]*IndexInfo)
+	var order []string
+	for rows.Next() {
+		var name, colName string
+		var nonUnique int
+		if rows.Scan(&name, &nonUnique, &colName) != nil {
+			continue
+		}
+		if _, ok := idxMap[name]; !ok {
+			idxMap[name] = &IndexInfo{Name: name, Unique: nonUnique == 0}
+			order = append(order, name)
+		}
+		idxMap[name].Columns = append(idxMap[name].Columns, colName)
+	}
+	var indices []IndexInfo
+	for _, name := range order {
+		indices = append(indices, *idxMap[name])
+	}
+	return indices, nil
+}

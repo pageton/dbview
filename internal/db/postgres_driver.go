@@ -170,3 +170,36 @@ func (d *PostgreSQLDriver) RowCount(ctx context.Context, table string) (int, err
 	rows.Close()
 	return n, nil
 }
+
+func (d *PostgreSQLDriver) LoadIndices(ctx context.Context, table string) ([]IndexInfo, error) {
+	rows, err := d.db.QueryContext(ctx,
+		`SELECT i.relname AS index_name,
+		        ix.indisunique AS is_unique,
+		        array_agg(a.attname ORDER BY k.n) AS columns
+		 FROM pg_class t
+		 JOIN pg_index ix ON t.oid = ix.indrelid
+		 JOIN pg_class i ON i.oid = ix.indexrelid
+		 JOIN unnest(ix.indkey) WITH ORDINALITY AS k(attnum, n) ON true
+		 JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = k.attnum
+		 WHERE t.relname = $1
+		   AND t.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'public')
+		 GROUP BY i.relname, ix.indisunique
+		 ORDER BY i.relname`, table)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var indices []IndexInfo
+	for rows.Next() {
+		var idx IndexInfo
+		var colArr string // postgres array like {col1,col2}
+		if rows.Scan(&idx.Name, &idx.Unique, &colArr) == nil {
+			colArr = strings.Trim(colArr, "{}")
+			if colArr != "" {
+				idx.Columns = strings.Split(colArr, ",")
+			}
+			indices = append(indices, idx)
+		}
+	}
+	return indices, nil
+}

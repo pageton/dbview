@@ -24,6 +24,13 @@ type FKInfo struct {
 	ID, Table, From, To string
 }
 
+// IndexInfo describes a database index.
+type IndexInfo struct {
+	Name    string
+	Columns []string
+	Unique  bool
+}
+
 // LoadSchema loads column metadata for the given SQLite table.
 func LoadSchema(db *sql.DB, tbl string) []ColInfo {
 	rows, err := db.Query(fmt.Sprintf("PRAGMA table_info(\"%s\")", strings.ReplaceAll(tbl, `"`, `""`)))
@@ -59,6 +66,41 @@ func LoadFKs(db *sql.DB, tbl string) []FKInfo {
 		}
 	}
 	return fks
+}
+
+// LoadIndices loads index information for the given SQLite table.
+func LoadIndices(db *sql.DB, tbl string) []IndexInfo {
+	rows, err := db.Query(fmt.Sprintf("PRAGMA index_list(\"%s\")", strings.ReplaceAll(tbl, `"`, `""`)))
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var indices []IndexInfo
+	for rows.Next() {
+		var seq int
+		var name string
+		var unique int
+		var origin string
+		var partial int
+		if rows.Scan(&seq, &name, &unique, &origin, &partial) != nil {
+			continue
+		}
+		idx := IndexInfo{Name: name, Unique: unique == 1}
+		// Load columns for this index
+		cr, err := db.Query(fmt.Sprintf("PRAGMA index_info(\"%s\")", strings.ReplaceAll(name, `"`, `""`)))
+		if err == nil {
+			for cr.Next() {
+				var rank int
+				var colName string
+				if cr.Scan(&rank, &colName) == nil && colName != "" {
+					idx.Columns = append(idx.Columns, colName)
+				}
+			}
+			cr.Close()
+		}
+		indices = append(indices, idx)
+	}
+	return indices
 }
 
 // ScanRows scans sql.Rows into a slice of string slices.

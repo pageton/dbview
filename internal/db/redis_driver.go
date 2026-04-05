@@ -119,6 +119,10 @@ func (d *RedisDriver) LoadFKs(ctx context.Context, table string) ([]FKInfo, erro
 	return nil, nil // Redis has no foreign keys
 }
 
+func (d *RedisDriver) LoadIndices(ctx context.Context, table string) ([]IndexInfo, error) {
+	return nil, nil // Redis has no indices
+}
+
 // Query returns rows for a Redis type. The "query" parameter is the Redis type name.
 // It samples up to PageSize keys of that type.
 func (d *RedisDriver) Query(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error) {

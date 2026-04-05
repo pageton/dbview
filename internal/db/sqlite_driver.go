@@ -44,6 +44,10 @@ func (d *SQLiteDriver) LoadFKs(ctx context.Context, table string) ([]FKInfo, err
 	return LoadFKs(d.db, table), nil
 }
 
+func (d *SQLiteDriver) LoadIndices(ctx context.Context, table string) ([]IndexInfo, error) {
+	return LoadIndices(d.db, table), nil
+}
+
 func (d *SQLiteDriver) Query(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error) {
 	return d.db.QueryContext(ctx, query, args...)
 }
