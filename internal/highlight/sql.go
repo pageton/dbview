@@ -320,7 +320,7 @@ func colorForToken(typ tokenType, cl theme.Colors) string {
 }
 
 // Highlight tokenizes the query, applies syntax-aware coloring, and inserts a
-// block cursor at the given rune position. The driverKind selects the keyword
+// styled cursor at the given rune position. The driverKind selects the keyword
 // set ("sqlite", "mysql", "postgresql", "mongodb", "redis").
 func Highlight(query string, cursor int, cl theme.Colors, driverKind string) string {
 	tokens := tokenize(query, driverKind)
@@ -334,6 +334,11 @@ func Highlight(query string, cursor int, cl theme.Colors, driverKind string) str
 		cursor = len(runes)
 	}
 
+	cursorStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(cl.AccentDim)).
+		Background(lipgloss.Color(cl.White)).
+		Bold(true)
+
 	var b strings.Builder
 	runeOffset := 0
 
@@ -345,17 +350,18 @@ func Highlight(query string, cursor int, cl theme.Colors, driverKind string) str
 
 		color := colorForToken(tok.typ, cl)
 
-		if cursor >= tokStart && cursor <= tokEnd {
-			// Cursor falls inside or at the boundary of this token.
+		if cursor >= tokStart && cursor < tokEnd {
+			// Cursor falls inside this token.
 			localPos := min(max(cursor-tokStart, 0), tokLen)
 
 			before := string(tokRunes[:localPos])
-			after := string(tokRunes[localPos:])
+			ch := string(tokRunes[localPos])
+			after := string(tokRunes[localPos+1:])
 
 			if before != "" {
 				b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Render(before))
 			}
-			b.WriteString("\u2588")
+			b.WriteString(cursorStyle.Render(ch))
 			if after != "" {
 				b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Render(after))
 			}
@@ -366,9 +372,9 @@ func Highlight(query string, cursor int, cl theme.Colors, driverKind string) str
 		runeOffset = tokEnd
 	}
 
-	// Cursor at the very end (after all tokens)
+	// Cursor at the very end (after all tokens) — render a space with cursor style
 	if cursor >= runeOffset {
-		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(cl.White)).Bold(true).Render("\u2588"))
+		b.WriteString(cursorStyle.Render(" "))
 	}
 
 	return b.String()

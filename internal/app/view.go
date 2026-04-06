@@ -15,7 +15,7 @@ import (
 
 // View renders the current UI view.
 
-// renderInputWithCursor renders text with a block cursor at the given rune position.
+// renderInputWithCursor renders text with a styled cursor at the given rune position.
 func renderInputWithCursor(text string, cursor int, _ ...bool) string {
 	runes := []rune(text)
 	if cursor < 0 {
@@ -24,9 +24,22 @@ func renderInputWithCursor(text string, cursor int, _ ...bool) string {
 	if cursor > len(runes) {
 		cursor = len(runes)
 	}
-	before := string(runes[:cursor])
-	after := string(runes[cursor:])
-	return before + "\u2588" + after
+	if cursor < len(runes) {
+		before := string(runes[:cursor])
+		ch := string(runes[cursor])
+		after := string(runes[cursor+1:])
+		cursorStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("0")).
+			Background(lipgloss.Color("7")).
+			Bold(true)
+		return before + cursorStyle.Render(ch) + after
+	}
+	// Cursor at end — show styled space
+	cursorStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("0")).
+		Background(lipgloss.Color("7")).
+		Bold(true)
+	return string(runes) + cursorStyle.Render(" ")
 }
 
 func (m Model) View() string {
