@@ -268,7 +268,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.view == ViewQuery {
 			return m.updateQuery(msg)
 		}
-		// T and ? are global only outside query mode
+		// In search mode, delegate all keys to updateSearch so letters like M, ?, T, Q can be typed
+		if m.view == ViewSearch {
+			return m.updateSearch(msg)
+		}
+		// T, ?, M, Q are global only outside query and search modes
 		if msg.String() == "T" {
 			for i, t := range theme.ThemeOrder {
 				if m.theme == t {
@@ -327,8 +331,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.totalRows = msg.Total
 		m.sortCol = -1
 		m.sortAsc = true
-		m.search = ""
-		m.page = 1
+		m.searches = nil
+		m.searchInput = ""
+		m.page = msg.Page
 		m.colCursor = 0
 		m.pages = m.calcPages()
 		m.view = ViewData
@@ -352,7 +357,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.page = 1
 			m.colCursor = 0
 			m.pages = m.calcPages()
-			m.search = ""
+			m.searches = nil
+			m.searchInput = ""
 			m = m.refreshTable()
 			m.affected = int64(len(msg.Rows))
 			statusMsg := fmt.Sprintf("Query returned %d row(s)", len(msg.Rows))
@@ -816,7 +822,7 @@ func (m Model) updateData(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "ctrl+f":
 		m.view = ViewSearch
-		m.search = ""
+		m.searchInput = ""
 		m.searchCursor = 0
 		return m, nil
 	case "left", "h":
@@ -1204,20 +1210,79 @@ func (m Model) updateQuery(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
-		m.search = ""
+		m.searches = nil
+		m.searchInput = ""
 		m.searchCursor = 0
 		m.view = ViewData
 		m = m.refreshTable()
 		return m, nil
 	case "enter":
-		m.view = ViewData
+		if strings.TrimSpace(m.searchInput) != "" {
+			// Save to search history
+			m.searchHist = append(m.searchHist, m.searchInput)
+			m.sHistIdx = len(m.searchHist)
+			// Split on "+" to support multi-term input (e.g. "pending + Mouse")
+			parts := strings.Split(m.searchInput, "+")
+			for _, p := range parts {
+				p = strings.TrimSpace(p)
+				// Strip surrounding quotes if present
+				p = strings.Trim(p, "\"'")
+				if p != "" {
+					m.searches = append(m.searches, p)
+				}
+			}
+			m.searchInput = ""
+			m.searchCursor = 0
+			m = m.refreshTable()
+		} else if len(m.searches) == 0 {
+			m.view = ViewData
+		} else {
+			m.view = ViewData
+		}
 		return m, nil
-	default:
-		if msg.String() == "/" {
+	case "up":
+		if len(m.searchHist) == 0 {
 			return m, nil
 		}
-		if newSearch, newCur, handled := handleTextInput(m.search, m.searchCursor, msg); handled {
-			m.search = newSearch
+		if m.sHistIdx > 0 {
+			m.sHistIdx--
+		}
+		if m.sHistIdx >= 0 && m.sHistIdx < len(m.searchHist) {
+			m.searchInput = m.searchHist[m.sHistIdx]
+			m.searchCursor = runeLen(m.searchInput)
+			m = m.refreshTable()
+		}
+		return m, nil
+	case "down":
+		if len(m.searchHist) == 0 {
+			return m, nil
+		}
+		if m.sHistIdx < len(m.searchHist)-1 {
+			m.sHistIdx++
+			m.searchInput = m.searchHist[m.sHistIdx]
+			m.searchCursor = runeLen(m.searchInput)
+		} else {
+			m.sHistIdx = len(m.searchHist)
+			m.searchInput = ""
+			m.searchCursor = 0
+		}
+		m = m.refreshTable()
+		return m, nil
+	case "ctrl+d", "ctrl+w":
+		if len(m.searches) > 0 {
+			m.searches = m.searches[:len(m.searches)-1]
+			m = m.refreshTable()
+		}
+		return m, nil
+	default:
+		if newSearch, newCur, handled := handleTextInput(m.searchInput, m.searchCursor, msg); handled {
+			// If backspace on empty input, remove last filter term
+			if newSearch == "" && m.searchInput == "" && len(m.searches) > 0 && (msg.String() == "backspace" || msg.String() == "ctrl+h") {
+				m.searches = m.searches[:len(m.searches)-1]
+				m = m.refreshTable()
+				return m, nil
+			}
+			m.searchInput = newSearch
 			m.searchCursor = newCur
 			m = m.refreshTable()
 		}

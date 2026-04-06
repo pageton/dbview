@@ -58,6 +58,7 @@ type DataLoaded struct {
 	Rows     [][]string
 	Total    int
 	TblName  string
+	Page     int
 	ScanErrs int
 }
 

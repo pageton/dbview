@@ -211,8 +211,8 @@ func (m Model) renderPagination() string {
 	return lipgloss.NewStyle().Width(m.width).Render(
 		lipgloss.JoinHorizontal(lipgloss.Top,
 			theme.Styled(left, cl.Dim),
-			lipgloss.NewStyle().Foreground(lipgloss.Color(cl.White)).Background(lipgloss.Color(cl.Accent)).Padding(0, 2).Bold(true).Render(nav),
 			theme.Styled(" "+info+" ", cl.Ok),
+			lipgloss.NewStyle().Foreground(lipgloss.Color(cl.White)).Background(lipgloss.Color(cl.Accent)).Padding(0, 2).Bold(true).Render(nav),
 			theme.Styled(right, cl.Dim),
 		))
 }
@@ -322,9 +322,13 @@ func (m Model) renderData() string {
 	var b strings.Builder
 	cl := m.c()
 	label := m.activeTbl
-	if m.search != "" {
+	if len(m.searches) > 0 {
 		filtered := m.filteredRows()
-		label = fmt.Sprintf("%s [filter: %q] (%d/%d)", m.activeTbl, m.search, len(filtered), len(m.allRows))
+		quoted := make([]string, len(m.searches))
+		for i, s := range m.searches {
+			quoted[i] = fmt.Sprintf("%q", s)
+		}
+		label = fmt.Sprintf("%s [filter: %s] (%d/%d)", m.activeTbl, strings.Join(quoted, " + "), len(filtered), len(m.allRows))
 	}
 	b.WriteString(m.header(fmt.Sprintf("Data — %s", label)))
 	b.WriteString("\n")
@@ -529,9 +533,23 @@ func (m Model) renderSearch() string {
 	cl := m.c()
 	b.WriteString(m.header(fmt.Sprintf("Filter — %s", m.activeTbl)))
 	b.WriteString("\n")
-	b.WriteString(theme.WarnStyle(cl).Render(" Type to filter rows (live search)"))
+	b.WriteString(theme.WarnStyle(cl).Render(" Type to filter rows. Use + to separate terms. Enter to confirm."))
 	b.WriteString("\n")
-	b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(cl.White)).Render(fmt.Sprintf(" /%s", renderInputWithCursor(m.search, m.searchCursor))))
+	// Show active filter tags
+	if len(m.searches) > 0 {
+		var tags []string
+		for _, s := range m.searches {
+			tags = append(tags, lipgloss.NewStyle().
+				Foreground(lipgloss.Color(cl.White)).
+				Background(lipgloss.Color(cl.Accent)).
+				Padding(0, 1).
+				Render(s))
+		}
+		b.WriteString(" Active: ")
+		b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, tags...))
+		b.WriteString("\n")
+	}
+	b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(cl.White)).Render(fmt.Sprintf(" /%s", renderInputWithCursor(m.searchInput, m.searchCursor))))
 	b.WriteString("\n")
 	filtered := m.filteredRows()
 	b.WriteString(theme.DimStyle(cl).Render(fmt.Sprintf(" %d/%d rows match", len(filtered), len(m.allRows))))
@@ -540,7 +558,8 @@ func (m Model) renderSearch() string {
 	bs := theme.BorderedTable(cl)
 	b.WriteString(bs.Render(m.dataTbl.View()))
 	b.WriteString("\n")
-	b.WriteString(theme.HelpStyle(cl).Render(" enter confirm • esc clear • ? help • q×2 quit"))
+	helps := " enter add filter • ↑↓ history • esc clear all • ctrl+d remove last • ? help • q×2 quit"
+	b.WriteString(theme.HelpStyle(cl).Render(helps))
 	return b.String()
 }
 

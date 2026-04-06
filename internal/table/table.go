@@ -112,19 +112,34 @@ func CalcColWidths(cols []string, rows [][]string, avail int) []table.Column {
 	return out
 }
 
-// FilteredRows filters rows by a case-insensitive search string.
-func FilteredRows(allRows [][]string, search string) [][]string {
-	if search == "" {
+// FilteredRows filters rows by multiple case-insensitive search terms.
+// All terms must match (AND logic) for a row to be included.
+func FilteredRows(allRows [][]string, searches []string) [][]string {
+	if len(searches) == 0 {
 		return allRows
 	}
-	s := strings.ToLower(search)
+	terms := make([]string, len(searches))
+	for i, s := range searches {
+		terms[i] = strings.ToLower(s)
+	}
 	var out [][]string
 	for _, row := range allRows {
-		for _, cell := range row {
-			if strings.Contains(strings.ToLower(cell), s) {
-				out = append(out, row)
+		match := true
+		for _, term := range terms {
+			found := false
+			for _, cell := range row {
+				if strings.Contains(strings.ToLower(cell), term) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				match = false
 				break
 			}
+		}
+		if match {
+			out = append(out, row)
 		}
 	}
 	return out

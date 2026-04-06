@@ -38,8 +38,11 @@ type Model struct {
 	dbPath       string
 	query        string
 	queryCursor  int
-	search       string
+	searches     []string
+	searchInput  string
 	searchCursor int
+	searchHist   []string
+	sHistIdx     int
 	dataTbl      btable.Model
 	activeTbl    string
 	dataCols     []string
@@ -88,6 +91,7 @@ func New(dsn string) Model {
 		page:       1,
 		qHistIdx:   -1,
 		queryHist:  []string{},
+		searchHist: []string{},
 		dbFileSize: "",
 		dbFileHash: "",
 		queryLog:   db.NewQueryLog(),
@@ -266,7 +270,20 @@ func (m *Model) refreshCachedStats() {
 }
 
 func (m Model) filteredRows() [][]string {
-	return table.FilteredRows(m.allRows, m.search)
+	terms := make([]string, len(m.searches))
+	copy(terms, m.searches)
+	if m.view == ViewSearch && strings.TrimSpace(m.searchInput) != "" {
+		// Split live input on "+" for multi-term live filtering
+		parts := strings.Split(m.searchInput, "+")
+		for _, p := range parts {
+			p = strings.TrimSpace(p)
+			p = strings.Trim(p, "\"'")
+			if p != "" {
+				terms = append(terms, p)
+			}
+		}
+	}
+	return table.FilteredRows(m.allRows, terms)
 }
 
 func (m Model) sortedRows(rows [][]string) [][]string {
@@ -323,7 +340,7 @@ func (m Model) loadData(tbl string) tea.Cmd {
 		if err != nil {
 			return ErrMsg{Err: err}
 		}
-		return DataLoaded{Cols: cols, Rows: data, Total: total, TblName: tbl}
+		return DataLoaded{Cols: cols, Rows: data, Total: total, TblName: tbl, Page: 1}
 	}
 }
 
@@ -333,7 +350,7 @@ func (m Model) loadPage(tbl string, page int) tea.Cmd {
 		if err != nil {
 			return ErrMsg{Err: err}
 		}
-		return DataLoaded{Cols: cols, Rows: data, Total: total, TblName: tbl}
+		return DataLoaded{Cols: cols, Rows: data, Total: total, TblName: tbl, Page: page}
 	}
 }
 

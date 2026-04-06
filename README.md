@@ -97,10 +97,33 @@ nix develop
 | `C` | Copy row to clipboard |
 | `[` `]` | Previous/next page |
 | `{` `}` | First/last page |
-| `ctrl+f` | Live filter |
+| `ctrl+f` | Live filter (multi-field) |
+| `ctrl+d` | Remove last search filter |
 | `s` | View schema |
 | `r` | Reload data |
 | `/` | SQL query |
+
+### Search/Filter Mode
+
+Press `ctrl+f` from Data View to enter. All terms use **AND** logic — a row must match every term to appear.
+
+| Key | Action |
+|-----|--------|
+| Type | Live-filter rows |
+| `enter` | Commit term (or `term1 + term2` for multiple) |
+| `↑` / `↓` | Navigate search history |
+| `esc` | Clear all filters and return to Data View |
+| `ctrl+d` / `ctrl+w` | Remove last committed filter |
+| `backspace` on empty | Remove last committed filter |
+
+Use `+` to add multiple terms at once:
+
+```
+pending + Mouse    →  two filters: "pending" AND "Mouse"
+"pending" + "Mouse"  →  quotes are stripped automatically
+```
+
+Committed filters remain active when returning to Data View.
 
 ### Schema View
 
