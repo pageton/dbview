@@ -1,4 +1,4 @@
-module dbview
+module github.com/pageton/dbview
 
 go 1.25.7
 

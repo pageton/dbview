@@ -4,7 +4,7 @@ import (
 	"sort"
 	"strings"
 
-	"dbview/internal/theme"
+	"github.com/pageton/dbview/internal/theme"
 
 	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/lipgloss"

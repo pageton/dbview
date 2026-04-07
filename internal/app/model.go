@@ -14,9 +14,9 @@ import (
 	"strings"
 	"time"
 
-	"dbview/internal/db"
-	"dbview/internal/table"
-	"dbview/internal/theme"
+	"github.com/pageton/dbview/internal/db"
+	"github.com/pageton/dbview/internal/table"
+	"github.com/pageton/dbview/internal/theme"
 
 	btable "github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"

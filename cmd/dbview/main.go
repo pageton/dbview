@@ -10,8 +10,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"dbview/internal/app"
-	"dbview/internal/db"
+	"github.com/pageton/dbview/internal/app"
+	"github.com/pageton/dbview/internal/db"
 )
 
 var version = "0.1.8"

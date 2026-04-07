@@ -4,7 +4,7 @@ import (
 	"strings"
 	"unicode"
 
-	"dbview/internal/theme"
+	"github.com/pageton/dbview/internal/theme"
 
 	"github.com/charmbracelet/lipgloss"
 )

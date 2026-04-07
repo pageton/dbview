@@ -7,10 +7,10 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"dbview/internal/db"
-	"dbview/internal/highlight"
-	"dbview/internal/table"
-	"dbview/internal/theme"
+	"github.com/pageton/dbview/internal/db"
+	"github.com/pageton/dbview/internal/highlight"
+	"github.com/pageton/dbview/internal/table"
+	"github.com/pageton/dbview/internal/theme"
 )
 
 // View renders the current UI view.

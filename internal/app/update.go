@@ -9,9 +9,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"dbview/internal/db"
-	"dbview/internal/table"
-	"dbview/internal/theme"
+	"github.com/pageton/dbview/internal/db"
+	"github.com/pageton/dbview/internal/table"
+	"github.com/pageton/dbview/internal/theme"
 )
 
 func keyText(msg tea.KeyMsg) string {
