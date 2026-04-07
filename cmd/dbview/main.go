@@ -4,9 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
+	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -19,7 +24,14 @@ var version = "0.1.8"
 const releaseAPIURL = "https://api.github.com/repos/pageton/dbview/releases/latest"
 
 type latestRelease struct {
-	TagName string `json:"tag_name"`
+	TagName string       `json:"tag_name"`
+	Assets  []releaseAsset `json:"assets"`
+}
+
+type releaseAsset struct {
+	Name string `json:"name"`
+	URL  string `json:"browser_download_url"`
+	Size int64  `json:"size"`
 }
 
 func main() {
@@ -33,8 +45,15 @@ func main() {
 	}
 
 	// Parse flags
-	if len(args) == 2 && args[0] == "update" && args[1] == "--check" {
-		if err := checkLatestVersion(); err != nil {
+	if len(args) >= 1 && args[0] == "update" {
+		if len(args) == 2 && args[1] == "--check" {
+			if err := checkLatestVersion(); err != nil {
+				fmt.Printf("Error: %v\n", err)
+				os.Exit(1)
+			}
+			os.Exit(0)
+		}
+		if err := runSelfUpdate(); err != nil {
 			fmt.Printf("Error: %v\n", err)
 			os.Exit(1)
 		}
@@ -51,10 +70,6 @@ func main() {
 			fmt.Printf("dbview %s\n", version)
 			os.Exit(0)
 		default:
-			if arg == "update" {
-				fmt.Println("Usage: dbview update --check")
-				os.Exit(1)
-			}
 			if strings.HasPrefix(arg, "-") {
 				fmt.Printf("Unknown flag: %s\n", arg)
 				fmt.Println("Run 'dbview --help' for more information.")
@@ -127,12 +142,226 @@ func checkLatestVersion() error {
 	return nil
 }
 
+// --- Self-update ---
+
+func runSelfUpdate() error {
+	fmt.Println("Checking for updates...")
+
+	release, err := fetchLatestRelease()
+	if err != nil {
+		return fmt.Errorf("check for updates: %w", err)
+	}
+
+	current := version
+	if !strings.HasPrefix(current, "v") {
+		current = "v" + current
+	}
+
+	if release.TagName == current {
+		fmt.Printf("dbview %s is already up to date\n", current)
+		return nil
+	}
+
+	assetName := buildAssetName(release.TagName)
+	var asset *releaseAsset
+	for i := range release.Assets {
+		if release.Assets[i].Name == assetName {
+			asset = &release.Assets[i]
+			break
+		}
+	}
+	if asset == nil {
+		return fmt.Errorf("no matching release asset found for %q (looked for %q)", runtime.GOOS+"/"+runtime.GOARCH, assetName)
+	}
+
+	fmt.Printf("Updating dbview %s -> %s\n", current, release.TagName)
+	fmt.Printf("Downloading %s ...\n", asset.Name)
+
+	exePath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolve executable path: %w", err)
+	}
+	exePath, err = filepath.EvalSymlinks(exePath)
+	if err != nil {
+		return fmt.Errorf("resolve symlink: %w", err)
+	}
+
+	tmpFile, err := os.CreateTemp(filepath.Dir(exePath), ".dbview-update-*")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	defer os.Remove(tmpPath)
+
+	if err := downloadWithProgress(asset.URL, asset.Size, tmpFile); err != nil {
+		tmpFile.Close()
+		return fmt.Errorf("download: %w", err)
+	}
+	tmpFile.Close()
+
+	if err := os.Chmod(tmpPath, 0755); err != nil {
+		return fmt.Errorf("chmod: %w", err)
+	}
+
+	// Atomic-ish replace: rename temp over the original binary.
+	backupPath := exePath + ".old"
+	_ = os.Remove(backupPath)
+	if err := os.Rename(exePath, backupPath); err != nil {
+		return fmt.Errorf("backup old binary: %w", err)
+	}
+	if err := os.Rename(tmpPath, exePath); err != nil {
+		// Rollback
+		_ = os.Rename(backupPath, exePath)
+		return fmt.Errorf("replace binary: %w", err)
+	}
+	_ = os.Remove(backupPath)
+
+	fmt.Printf("\nUpdated dbview to %s\n", release.TagName)
+	return nil
+}
+
+func fetchLatestRelease() (*latestRelease, error) {
+	req, err := http.NewRequest(http.MethodGet, releaseAPIURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("User-Agent", "dbview")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GitHub API returned %s", resp.Status)
+	}
+
+	var release latestRelease
+	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+		return nil, err
+	}
+	if release.TagName == "" {
+		return nil, fmt.Errorf("latest release did not include a tag")
+	}
+	return &release, nil
+}
+
+func buildAssetName(tag string) string {
+	goos := runtime.GOOS
+	goarch := runtime.GOARCH
+	ext := ""
+	if goos == "windows" {
+		ext = ".exe"
+	}
+	return fmt.Sprintf("dbview_%s_%s_%s%s", tag, goos, goarch, ext)
+}
+
+func downloadWithProgress(url string, size int64, dst *os.File) error {
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("User-Agent", "dbview")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("download failed: %s", resp.Status)
+	}
+
+	// Use ContentLength as fallback if size is unknown
+	total := size
+	if total <= 0 {
+		total = resp.ContentLength
+	}
+
+	buf := make([]byte, 32*1024)
+	var downloaded int64
+	lastPrint := time.Now()
+
+	for {
+		n, readErr := resp.Body.Read(buf)
+		if n > 0 {
+			if _, err := dst.Write(buf[:n]); err != nil {
+				return err
+			}
+			downloaded += int64(n)
+		}
+
+		now := time.Now()
+		if now.Sub(lastPrint) >= 100*time.Millisecond || readErr != nil {
+			renderProgress(downloaded, total)
+			lastPrint = now
+		}
+
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			return readErr
+		}
+	}
+
+	// Final progress at 100%
+	renderProgress(downloaded, total)
+	fmt.Println()
+	return nil
+}
+
+func renderProgress(downloaded, total int64) {
+	const width = 40
+
+	pct := float64(0)
+	if total > 0 {
+		pct = float64(downloaded) / float64(total)
+		if pct > 1 {
+			pct = 1
+		}
+	}
+
+	filled := int(pct * width)
+	if filled > width {
+		filled = width
+	}
+
+	bar := strings.Repeat("█", filled) + strings.Repeat("░", width-filled)
+	downloadedStr := formatBytes(downloaded)
+	totalStr := "?"
+	if total > 0 {
+		totalStr = formatBytes(total)
+	}
+	pctStr := fmt.Sprintf("%5.1f%%", pct*100)
+
+	fmt.Fprintf(os.Stderr, "\r  [%s] %s %s/%s ", bar, pctStr, downloadedStr, totalStr)
+}
+
+func formatBytes(b int64) string {
+	const (
+		KB = 1024
+		MB = KB * 1024
+	)
+	switch {
+	case b >= MB:
+		return fmt.Sprintf("%.1fMB", float64(b)/float64(MB))
+	case b >= KB:
+		return fmt.Sprintf("%.1fKB", float64(b)/float64(KB))
+	default:
+		return strconv.FormatInt(b, 10) + "B"
+	}
+}
+
 func printHelp() {
 	fmt.Print(`dbview - Terminal UI database viewer
 
 USAGE
   dbview <database-path-or-url>
-  dbview update --check
+  dbview update [--check]
 
 DATABASES
   SQLite       dbview ./mydb.db
@@ -151,6 +380,7 @@ FLAGS
   -v, --version    Print version
 
 UPDATE
+  update           Download and install the latest release
   update --check   Check for a newer release on GitHub
 
 KEYBINDINGS
