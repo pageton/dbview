@@ -2,9 +2,9 @@
 
 Terminal TUI database viewer for SQLite, MySQL, MariaDB, PostgreSQL, CockroachDB, MSSQL, MongoDB, Redis, and Cassandra.
 
-![dbview demo](docs/dbview-demo-preview.gif)
+## Demo
 
-[Direct demo preview file](docs/dbview-demo-preview.gif)
+[![asciicast](https://asciinema.org/a/Q23Y0owAhJMxDqF5.svg)](https://asciinema.org/a/Q23Y0owAhJMxDqF5)
 
 ## Install
 
