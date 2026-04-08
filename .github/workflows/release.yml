@@ -223,7 +223,7 @@ jobs:
             ${APP_NAME}_*_windows_amd64.exe > checksums.txt
 
       - name: Publish GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v2.6.1
         with:
           generate_release_notes: true
           files: |
