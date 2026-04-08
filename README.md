@@ -159,3 +159,7 @@ Committed filters remain active when returning to Data View.
 | `q` | Quit |
 | `esc` | Go back / cancel |
 | `ctrl+c` | Force quit |
+
+## License
+
+[MIT](LICENSE)
