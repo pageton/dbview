@@ -29,7 +29,7 @@ type StructuredValue struct {
 // FormatStructuredValue creates a StructuredValue from a raw interface{} value.
 func FormatStructuredValue(v interface{}) StructuredValue {
 	var display, detail string
-	kind := ValueString
+	var kind ValueKind
 
 	if v == nil {
 		return StructuredValue{Raw: nil, Display: "NULL", Detail: "NULL", Kind: ValueNull}

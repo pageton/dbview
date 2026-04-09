@@ -160,14 +160,6 @@ func (m Model) c() theme.Colors {
 	return theme.Resolve(m.theme)
 }
 
-func (m Model) hasPK(tbl string) bool {
-	return db.HasPK(m.schema[tbl])
-}
-
-func (m Model) colSelectExpr(tbl string) string {
-	return db.ColSelectExpr(m.schema[tbl])
-}
-
 func (m Model) colNames(tbl string) []string {
 	return db.ColNames(m.schema[tbl])
 }
@@ -216,11 +208,11 @@ func (m Model) pkWhere(cursor int) (string, []interface{}) {
 		}
 		var rowid interface{}
 		if !rows.Next() {
-			rows.Close()
+			_ = rows.Close()
 			return "", nil
 		}
-		rows.Scan(&rowid)
-		rows.Close()
+		_ = rows.Scan(&rowid)
+		_ = rows.Close()
 		return "rowid = ?", []interface{}{rowid}
 	}
 
@@ -452,7 +444,7 @@ func (m Model) execQuery(q string) tea.Cmd {
 
 		rows, err := m.driver.Query(m.ctx, q)
 		if err == nil {
-			defer rows.Close()
+			defer func() { _ = rows.Close() }()
 			cols, _ := rows.Columns()
 			if len(cols) > 0 {
 				data, scanErrs, _ := db.ScanRows(rows, len(cols))
@@ -486,8 +478,8 @@ func (m Model) execExport(fmtType string) tea.Cmd {
 		rows, err := m.driver.Query(m.ctx, fmt.Sprintf("SELECT COUNT(*) FROM %q", m.activeTbl))
 		if err == nil {
 			rows.Next()
-			rows.Scan(&total)
-			rows.Close()
+			_ = rows.Scan(&total)
+			_ = rows.Close()
 		}
 
 		base := strings.TrimSuffix(filepath.Base(m.dbPath), filepath.Ext(m.dbPath))
@@ -515,10 +507,10 @@ func (m Model) exportCSV(fname string, cols []string, total int) tea.Msg {
 	if err != nil {
 		return ErrMsg{Err: err}
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	bw := bufio.NewWriter(f)
 	w := csv.NewWriter(bw)
-	w.Write(cols)
+	_ = w.Write(cols)
 	exported := 0
 	scanErrs := 0
 	for offset := 0; offset < total; offset += db.PageSize {
@@ -528,15 +520,15 @@ func (m Model) exportCSV(fname string, cols []string, total int) tea.Msg {
 			return ErrMsg{Err: err}
 		}
 		data, se, _ := db.ScanRows(rows, len(cols))
-		rows.Close()
+		_ = rows.Close()
 		scanErrs += se
 		for _, row := range data {
-			w.Write(row)
+			_ = w.Write(row)
 			exported++
 		}
 	}
 	w.Flush()
-	bw.Flush()
+	_ = bw.Flush()
 	msg := fmt.Sprintf("Exported %d rows to %s", exported, path)
 	if scanErrs > 0 {
 		msg += fmt.Sprintf(" (%d scan errors)", scanErrs)
@@ -550,9 +542,9 @@ func (m Model) exportJSON(fname string, cols []string, total int) tea.Msg {
 	if err != nil {
 		return ErrMsg{Err: err}
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	bw := bufio.NewWriter(f)
-	bw.WriteString("[")
+	_, _ = bw.WriteString("[")
 	exported := 0
 	scanErrs := 0
 	first := true
@@ -563,11 +555,11 @@ func (m Model) exportJSON(fname string, cols []string, total int) tea.Msg {
 			return ErrMsg{Err: err}
 		}
 		data, se, _ := db.ScanRows(rows, len(cols))
-		rows.Close()
+		_ = rows.Close()
 		scanErrs += se
 		for _, row := range data {
 			if !first {
-				bw.WriteString(",\n")
+				_, _ = bw.WriteString(",\n")
 			}
 			first = false
 			rec := make(map[string]string)
@@ -577,12 +569,12 @@ func (m Model) exportJSON(fname string, cols []string, total int) tea.Msg {
 				}
 			}
 			b, _ := json.Marshal(rec)
-			bw.Write(b)
+			_, _ = bw.Write(b)
 			exported++
 		}
 	}
-	bw.WriteString("\n]")
-	bw.Flush()
+	_, _ = bw.WriteString("\n]")
+	_ = bw.Flush()
 	msg := fmt.Sprintf("Exported %d rows to %s", exported, path)
 	if scanErrs > 0 {
 		msg += fmt.Sprintf(" (%d scan errors)", scanErrs)
@@ -596,7 +588,7 @@ func (m Model) exportXLSX(fname string, cols []string, total int) tea.Msg {
 	sheet := "Sheet1"
 	for i, col := range cols {
 		cell, _ := excelize.CoordinatesToCellName(i+1, 1)
-		f.SetCellValue(sheet, cell, col)
+		_ = f.SetCellValue(sheet, cell, col)
 	}
 	exported := 0
 	scanErrs := 0
@@ -608,12 +600,12 @@ func (m Model) exportXLSX(fname string, cols []string, total int) tea.Msg {
 			return ErrMsg{Err: err}
 		}
 		data, se, _ := db.ScanRows(rows, len(cols))
-		rows.Close()
+		_ = rows.Close()
 		scanErrs += se
 		for _, row := range data {
 			for ci, val := range row {
 				cell, _ := excelize.CoordinatesToCellName(ci+1, ri)
-				f.SetCellValue(sheet, cell, val)
+				_ = f.SetCellValue(sheet, cell, val)
 			}
 			ri++
 			exported++
@@ -621,7 +613,7 @@ func (m Model) exportXLSX(fname string, cols []string, total int) tea.Msg {
 	}
 	for i := range cols {
 		cn, _ := excelize.ColumnNumberToName(i + 1)
-		f.SetColWidth(sheet, cn, cn, 20)
+		_ = f.SetColWidth(sheet, cn, cn, 20)
 	}
 	if err := f.SaveAs(path); err != nil {
 		return ErrMsg{Err: err}
@@ -639,18 +631,18 @@ func (m Model) exportSQL(base, fname string, cols []string, info []db.ColInfo, t
 	if err != nil {
 		return ErrMsg{Err: err}
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	bw := bufio.NewWriter(f)
-	fmt.Fprintf(bw, "-- SQLite dump: %s.%s\n\n", base, m.activeTbl)
+	_, _ = fmt.Fprintf(bw, "-- SQLite dump: %s.%s\n\n", base, m.activeTbl)
 	sr, _ := m.driver.Query(m.ctx, fmt.Sprintf("SELECT sql FROM sqlite_master WHERE type='table' AND name=%q", m.activeTbl))
 	if sr != nil {
 		for sr.Next() {
 			var s string
 			if sr.Scan(&s) == nil {
-				bw.WriteString(s + ";\n\n")
+				_, _ = bw.WriteString(s + ";\n\n")
 			}
 		}
-		sr.Close()
+		_ = sr.Close()
 	}
 	exported := 0
 	for offset := 0; offset < total; offset += db.PageSize {
@@ -660,7 +652,7 @@ func (m Model) exportSQL(base, fname string, cols []string, info []db.ColInfo, t
 			return ErrMsg{Err: err}
 		}
 		data, _, _ := db.ScanRows(rows, len(cols))
-		rows.Close()
+		_ = rows.Close()
 		for _, row := range data {
 			var cs, vs []string
 			for i, cell := range row {
@@ -682,11 +674,11 @@ func (m Model) exportSQL(base, fname string, cols []string, info []db.ColInfo, t
 					}
 				}
 			}
-			fmt.Fprintf(bw, "INSERT INTO %q (%s) VALUES (%s);\n", m.activeTbl, strings.Join(cs, ", "), strings.Join(vs, ", "))
+			_, _ = fmt.Fprintf(bw, "INSERT INTO %q (%s) VALUES (%s);\n", m.activeTbl, strings.Join(cs, ", "), strings.Join(vs, ", "))
 			exported++
 		}
 	}
-	bw.Flush()
+	_ = bw.Flush()
 	return NotifyMsg{Msg: fmt.Sprintf("Exported %d rows to %s", exported, path)}
 }
 
@@ -723,7 +715,7 @@ func (m Model) execImport(path, format string) tea.Cmd {
 		if err != nil {
 			return ErrMsg{Err: fmt.Errorf("open file: %w", err)}
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 
 		var rows [][]string
 		switch format {
