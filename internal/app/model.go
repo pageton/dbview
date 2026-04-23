@@ -173,6 +173,22 @@ func (m Model) rowCount(tbl string) int {
 	return n
 }
 
+// visibleRow returns the row data at the given cursor position, respecting
+// active search filters and sort order. Falls back to allRows when unfiltered.
+func (m Model) visibleRow(cursor int) []string {
+	filtered := m.filteredRows()
+	if len(filtered) != len(m.allRows) || len(m.searches) > 0 {
+		sorted := m.sortedRows(filtered)
+		if cursor >= 0 && cursor < len(sorted) {
+			return sorted[cursor]
+		}
+	}
+	if cursor >= 0 && cursor < len(m.allRows) {
+		return m.allRows[cursor]
+	}
+	return nil
+}
+
 func (m Model) globalRowIdx(cursor int) int {
 	return (m.page-1)*db.PageSize + cursor
 }
@@ -221,9 +237,10 @@ func (m Model) pkWhere(cursor int) (string, []interface{}) {
 	var args []interface{}
 	for _, pk := range pkCols {
 		for i, c := range m.dataCols {
-			if c == pk && cursor < len(m.allRows) && i < len(m.allRows[cursor]) {
+			row := m.visibleRow(cursor)
+			if c == pk && row != nil && i < len(row) {
 				conds = append(conds, fmt.Sprintf("%q = ?", pk))
-				args = append(args, m.allRows[cursor][i])
+				args = append(args, row[i])
 			}
 		}
 	}

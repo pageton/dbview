@@ -869,8 +869,8 @@ func (m Model) updateData(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			colName := m.dataCols[editCol]
 			oldVal := ""
-			if cursor < len(m.allRows) && editCol < len(m.allRows[cursor]) {
-				oldVal = m.allRows[cursor][editCol]
+			if row := m.visibleRow(cursor); row != nil && editCol < len(row) {
+				oldVal = row[editCol]
 			}
 			displayRow := m.globalRowIdx(cursor) + 1
 			m.dialog = Dialog{
@@ -939,7 +939,8 @@ func (m Model) updateData(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 			}
 			cursor := m.dataTbl.Cursor()
-			if cursor >= len(m.allRows) {
+			row := m.visibleRow(cursor)
+			if row == nil {
 				return m, nil
 			}
 			info := m.schema[m.activeTbl]
@@ -952,8 +953,8 @@ func (m Model) updateData(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 				insertCols = append(insertCols, c.Name)
 				placeholders = append(placeholders, "?")
-				if i < len(m.allRows[cursor]) {
-					args = append(args, m.allRows[cursor][i])
+				if i < len(row) {
+					args = append(args, row[i])
 				} else {
 					args = append(args, nil)
 				}
@@ -962,8 +963,8 @@ func (m Model) updateData(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				for i, c := range info {
 					insertCols = append(insertCols, c.Name)
 					placeholders = append(placeholders, "?")
-					if i < len(m.allRows[cursor]) {
-						args = append(args, m.allRows[cursor][i])
+					if i < len(row) {
+						args = append(args, row[i])
 					} else {
 						args = append(args, nil)
 					}
