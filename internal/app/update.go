@@ -1,13 +1,14 @@
 package app
 
 import (
+	"context"
 	"encoding/csv"
 	"fmt"
+	tea "github.com/charmbracelet/bubbletea"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
-
-	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/pageton/dbview/internal/db"
 	"github.com/pageton/dbview/internal/table"
@@ -358,6 +359,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = msg.Err
 		return m, nil
 
+	case reloadDoneMsg:
+		m.loading = false
+		m.tables = msg.tables
+		m.schema = msg.schema
+		m.fks = msg.fks
+		m.rowCounts = msg.rowCounts
+		if m.cursor >= len(m.tables) {
+			m.cursor = len(m.tables) - 1
+		}
+		if m.cursor < 0 {
+			m.cursor = 0
+		}
+		m = m.setStatus(fmt.Sprintf("Reloaded %d table(s)", len(m.tables)))
+		return m, doTick()
 	case tea.MouseMsg:
 		switch m.view {
 		case ViewTables:
@@ -733,6 +748,7 @@ func (m Model) updateTables(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 							Timestamp: time.Now(), Operation: "DROP", Table: tbl,
 							Query: logQ, Duration: dur,
 						})
+						delete(m.rowCounts, tbl)
 						m.tables = nil
 						m.schema = make(map[string][]db.ColInfo)
 						m.fks = make(map[string][]db.FKInfo)
@@ -757,25 +773,36 @@ func (m Model) updateTables(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "D":
 		m.view = ViewStats
 	case "r", "R":
-		tables, err := m.driver.ListTables(m.ctx)
-		if err != nil {
-			m.err = err
-			return m, nil
+		m.loading = true
+		return m, func() tea.Msg {
+			ctx, cancel := context.WithTimeout(m.ctx, 30*time.Second)
+			defer cancel()
+			tables, err := m.driver.ListTables(ctx)
+			if err != nil {
+				return ErrMsg{Err: fmt.Errorf("reload: %w", err)}
+			}
+			schema := make(map[string][]db.ColInfo, len(tables))
+			fks := make(map[string][]db.FKInfo, len(tables))
+			rowCounts := make(map[string]int, len(tables))
+			var mu sync.Mutex
+			var wg sync.WaitGroup
+			for _, name := range tables {
+				wg.Add(1)
+				go func(tbl string) {
+					defer wg.Done()
+					s, _ := m.driver.LoadSchema(ctx, tbl)
+					f, _ := m.driver.LoadFKs(ctx, tbl)
+					rc, _ := m.driver.RowCount(ctx, tbl)
+					mu.Lock()
+					schema[tbl] = s
+					fks[tbl] = f
+					rowCounts[tbl] = rc
+					mu.Unlock()
+				}(name)
+			}
+			wg.Wait()
+			return reloadDoneMsg{tables: tables, schema: schema, fks: fks, rowCounts: rowCounts}
 		}
-		m.tables = tables
-		m.schema = make(map[string][]db.ColInfo)
-		m.fks = make(map[string][]db.FKInfo)
-		for _, name := range m.tables {
-			m.schema[name], _ = m.driver.LoadSchema(m.ctx, name)
-			m.fks[name], _ = m.driver.LoadFKs(m.ctx, name)
-		}
-		if m.cursor >= len(m.tables) {
-			m.cursor = len(m.tables) - 1
-		}
-		if m.cursor < 0 {
-			m.cursor = 0
-		}
-		m = m.setStatus(fmt.Sprintf("Reloaded %d table(s)", len(m.tables)))
 	case "F":
 		if len(m.tables) > 0 {
 			tbl := m.tables[m.cursor]
@@ -801,6 +828,7 @@ func (m Model) updateTables(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 							Timestamp: time.Now(), Operation: "FLUSH", Table: tbl,
 							Query: logQ, Duration: dur,
 						})
+						m.rowCounts[tbl] = 0
 						cols, data, total, loadErr := m.driver.LoadTableData(m.ctx, tbl, 1, db.PageSize)
 						if loadErr != nil {
 							return ErrMsg{Err: loadErr}
@@ -1050,8 +1078,7 @@ func (m Model) updateData(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "c":
 		cursor := m.dataTbl.Cursor()
-		filtered := m.filteredRows()
-		sorted := m.sortedRows(filtered)
+		sorted := m.sortedRowsCache
 		if cursor < len(sorted) {
 			editCol := m.colCursor
 			if editCol < len(m.dataCols) {
@@ -1065,8 +1092,7 @@ func (m Model) updateData(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "C":
 		cursor := m.dataTbl.Cursor()
-		filtered := m.filteredRows()
-		sorted := m.sortedRows(filtered)
+		sorted := m.sortedRowsCache
 		if cursor < len(sorted) {
 			return m, copyToClipboard(strings.Join(sorted[cursor], " | "))
 		}
@@ -1454,11 +1480,7 @@ func isDestructiveQueryForDriver(d db.Driver, q string) bool {
 		return ok
 
 	case db.KindMongoDB:
-		prefixes := []string{
-			"INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "TRUNCATE",
-			"ATTACH", "DETACH", "REPLACE", "CREATE", "UPSERT",
-		}
-		for _, p := range prefixes {
+		for _, p := range mongoDestructivePrefixes {
 			if strings.HasPrefix(upper, p) {
 				return true
 			}
@@ -1466,11 +1488,7 @@ func isDestructiveQueryForDriver(d db.Driver, q string) bool {
 		return false
 
 	case db.KindCassandra:
-		prefixes := []string{
-			"INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "TRUNCATE",
-			"CREATE",
-		}
-		for _, p := range prefixes {
+		for _, p := range cassandraDestructivePrefixes {
 			if strings.HasPrefix(upper, p) {
 				return true
 			}
@@ -1481,15 +1499,25 @@ func isDestructiveQueryForDriver(d db.Driver, q string) bool {
 	}
 }
 
+var destructivePrefixes = []string{
+	"INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "TRUNCATE",
+	"ATTACH", "DETACH", "REPLACE", "CREATE",
+}
+
+var mongoDestructivePrefixes = []string{
+	"INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "TRUNCATE",
+	"ATTACH", "DETACH", "REPLACE", "CREATE", "UPSERT",
+}
+
+var cassandraDestructivePrefixes = []string{
+	"INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "TRUNCATE", "CREATE",
+}
+
 // isDestructiveQuery returns true if the SQL statement is likely to mutate data
 // or schema (INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE, ATTACH, DETACH, REPLACE).
 func isDestructiveQuery(q string) bool {
 	upper := strings.ToUpper(strings.TrimSpace(q))
-	prefixes := []string{
-		"INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "TRUNCATE",
-		"ATTACH", "DETACH", "REPLACE", "CREATE",
-	}
-	for _, p := range prefixes {
+	for _, p := range destructivePrefixes {
 		if strings.HasPrefix(upper, p) {
 			return true
 		}

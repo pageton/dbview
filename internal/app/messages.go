@@ -3,6 +3,8 @@ package app
 import (
 	"database/sql"
 	"time"
+
+	"github.com/pageton/dbview/internal/db"
 )
 
 // ViewMode represents the current UI view.
@@ -89,4 +91,12 @@ type ColInfo = struct {
 // FKInfo is re-exported from the db package for use in the model.
 type FKInfo = struct {
 	ID, Table, From, To string
+}
+
+// reloadDoneMsg carries the result of an async table reload.
+type reloadDoneMsg struct {
+	tables    []string
+	schema    map[string][]db.ColInfo
+	fks       map[string][]db.FKInfo
+	rowCounts map[string]int
 }

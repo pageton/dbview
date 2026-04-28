@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pageton/dbview/internal/db"
@@ -27,56 +28,59 @@ const startupTimeout = 10 * time.Second
 
 // Model is the main Bubble Tea model for the app.
 type Model struct {
-	driver        db.Driver
-	ctx           context.Context
-	cancel        context.CancelFunc
-	tables        []string
-	schema        map[string][]db.ColInfo
-	fks           map[string][]db.FKInfo
-	view          ViewMode
-	cursor        int
-	dbPath        string
-	query         string
-	queryCursor   int
-	searches      []string
-	searchInput   string
-	searchCursor  int
-	searchHist    []string
-	sHistIdx      int
-	dataTbl       btable.Model
-	activeTbl     string
-	dataCols      []string
-	allRows       [][]string
-	totalRows     int
-	sortCol       int
-	sortAsc       bool
-	affected      int64
-	err           error
-	width         int
-	height        int
-	ready         bool
-	dialog        Dialog
-	status        string
-	page          int
-	pages         int
-	colCursor     int
-	theme         string
-	helpVis       bool
-	queryHist     []string
-	qHistIdx      int
-	spinner       int
-	loading       bool
-	flash         string
-	flashEnd      time.Time
-	dbFileSize    string
-	dbFileHash    string
-	queryLog      db.QueryLog
-	prevView      ViewMode
-	logCursor     int
-	logExpand     bool
-	mouseOn       bool
-	lastQuitPress time.Time
-	detailRows    [][]string
+	driver            db.Driver
+	ctx               context.Context
+	cancel            context.CancelFunc
+	tables            []string
+	schema            map[string][]db.ColInfo
+	fks               map[string][]db.FKInfo
+	view              ViewMode
+	cursor            int
+	dbPath            string
+	query             string
+	queryCursor       int
+	searches          []string
+	searchInput       string
+	searchCursor      int
+	searchHist        []string
+	sHistIdx          int
+	dataTbl           btable.Model
+	activeTbl         string
+	dataCols          []string
+	allRows           [][]string
+	totalRows         int
+	sortCol           int
+	sortAsc           bool
+	affected          int64
+	err               error
+	width             int
+	height            int
+	ready             bool
+	dialog            Dialog
+	status            string
+	page              int
+	pages             int
+	colCursor         int
+	theme             string
+	helpVis           bool
+	queryHist         []string
+	qHistIdx          int
+	spinner           int
+	loading           bool
+	flash             string
+	flashEnd          time.Time
+	dbFileSize        string
+	dbFileHash        string
+	queryLog          db.QueryLog
+	prevView          ViewMode
+	logCursor         int
+	logExpand         bool
+	mouseOn           bool
+	lastQuitPress     time.Time
+	detailRows        [][]string
+	rowCounts         map[string]int
+	filteredRowsCache [][]string
+	sortedRowsCache   [][]string
 }
 
 // New creates a new Model by opening the given database.
@@ -96,6 +100,7 @@ func New(dsn string) Model {
 		dbFileSize: "",
 		dbFileHash: "",
 		queryLog:   db.NewQueryLog(),
+		rowCounts:  make(map[string]int),
 		mouseOn:    false,
 	}
 	m.ctx, m.cancel = context.WithCancel(context.Background())
@@ -114,11 +119,30 @@ func New(dsn string) Model {
 		m.err = fmt.Errorf("list tables: %w", err)
 		return m
 	}
+	schema := make(map[string][]db.ColInfo, len(tables))
+	fks := make(map[string][]db.FKInfo, len(tables))
+	rowCounts := make(map[string]int, len(tables))
+	var mu sync.Mutex
+	var wg sync.WaitGroup
 	for _, name := range tables {
-		m.schema[name], _ = driver.LoadSchema(startupCtx, name)
-		m.fks[name], _ = driver.LoadFKs(startupCtx, name)
+		wg.Add(1)
+		go func(tbl string) {
+			defer wg.Done()
+			s, _ := driver.LoadSchema(startupCtx, tbl)
+			f, _ := driver.LoadFKs(startupCtx, tbl)
+			rc, _ := driver.RowCount(startupCtx, tbl)
+			mu.Lock()
+			schema[tbl] = s
+			fks[tbl] = f
+			rowCounts[tbl] = rc
+			mu.Unlock()
+		}(name)
 	}
+	wg.Wait()
 	m.tables = tables
+	m.schema = schema
+	m.fks = fks
+	m.rowCounts = rowCounts
 	m.ready = true
 	m.dbFileSize = m.computeDBSize()
 	m.dbFileHash = m.computeFileHash()
@@ -166,21 +190,15 @@ func (m Model) colNames(tbl string) []string {
 }
 
 func (m Model) rowCount(tbl string) int {
-	n, err := m.driver.RowCount(m.ctx, tbl)
-	if err != nil {
-		return 0
-	}
-	return n
+	return m.rowCounts[tbl]
 }
 
 // visibleRow returns the row data at the given cursor position, respecting
 // active search filters and sort order. Falls back to allRows when unfiltered.
 func (m Model) visibleRow(cursor int) []string {
-	filtered := m.filteredRows()
-	if len(filtered) != len(m.allRows) || len(m.searches) > 0 {
-		sorted := m.sortedRows(filtered)
-		if cursor >= 0 && cursor < len(sorted) {
-			return sorted[cursor]
+	if len(m.searches) > 0 || (m.view == ViewSearch && strings.TrimSpace(m.searchInput) != "") {
+		if cursor >= 0 && cursor < len(m.sortedRowsCache) {
+			return m.sortedRowsCache[cursor]
 		}
 	}
 	if cursor >= 0 && cursor < len(m.allRows) {
@@ -233,12 +251,15 @@ func (m Model) pkWhere(cursor int) (string, []interface{}) {
 		return "rowid = ?", []interface{}{rowid}
 	}
 
+	row := m.visibleRow(cursor)
+	if row == nil {
+		return "", nil
+	}
 	var conds []string
 	var args []interface{}
 	for _, pk := range pkCols {
 		for i, c := range m.dataCols {
-			row := m.visibleRow(cursor)
-			if c == pk && row != nil && i < len(row) {
+			if c == pk && i < len(row) {
 				conds = append(conds, fmt.Sprintf("%q = ?", pk))
 				args = append(args, row[i])
 			}
@@ -305,9 +326,9 @@ func (m Model) buildTable(rows [][]string, cols []string) btable.Model {
 }
 
 func (m Model) refreshTable() Model {
-	rows := m.filteredRows()
-	rows = m.sortedRows(rows)
-	m.dataTbl = m.buildTable(rows, m.dataCols)
+	m.filteredRowsCache = m.filteredRows()
+	m.sortedRowsCache = table.SortedRows(m.filteredRowsCache, m.sortCol, m.sortAsc, len(m.dataCols))
+	m.dataTbl = m.buildTable(m.sortedRowsCache, m.dataCols)
 	return m
 }
 
@@ -346,7 +367,9 @@ func copyToClipboard(text string) tea.Cmd {
 
 func (m Model) loadData(tbl string) tea.Cmd {
 	return func() tea.Msg {
-		cols, data, total, err := m.driver.LoadTableData(m.ctx, tbl, 1, db.PageSize)
+		ctx, cancel := context.WithTimeout(m.ctx, 30*time.Second)
+		defer cancel()
+		cols, data, total, err := m.driver.LoadTableData(ctx, tbl, 1, db.PageSize)
 		if err != nil {
 			return ErrMsg{Err: err}
 		}
@@ -356,7 +379,9 @@ func (m Model) loadData(tbl string) tea.Cmd {
 
 func (m Model) loadPage(tbl string, page int) tea.Cmd {
 	return func() tea.Msg {
-		cols, data, total, err := m.driver.LoadTableData(m.ctx, tbl, page, db.PageSize)
+		ctx, cancel := context.WithTimeout(m.ctx, 30*time.Second)
+		defer cancel()
+		cols, data, total, err := m.driver.LoadTableData(ctx, tbl, page, db.PageSize)
 		if err != nil {
 			return ErrMsg{Err: err}
 		}
@@ -366,6 +391,8 @@ func (m Model) loadPage(tbl string, page int) tea.Cmd {
 
 func (m Model) execQuery(q string) tea.Cmd {
 	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(m.ctx, 60*time.Second)
+		defer cancel()
 		logEntry := db.QueryLogEntry{
 			Timestamp: time.Now(),
 			Operation: "SELECT",
@@ -382,7 +409,7 @@ func (m Model) execQuery(q string) tea.Cmd {
 					m.queryLog.Add(logEntry)
 					return ErrMsg{Err: logEntry.Error}
 				}
-				cols, rows, affected, err := md.ExecuteQuery(m.ctx, q, m.activeTbl, int64(db.PageSize))
+				cols, rows, affected, err := md.ExecuteQuery(ctx, q, m.activeTbl, int64(db.PageSize))
 				logEntry.Duration = time.Since(logEntry.Timestamp)
 				logEntry.Operation = "MONGO"
 				if err != nil {
@@ -405,7 +432,7 @@ func (m Model) execQuery(q string) tea.Cmd {
 					m.queryLog.Add(logEntry)
 					return ErrMsg{Err: logEntry.Error}
 				}
-				cols, rows, affected, err := rd.ExecuteQuery(m.ctx, q)
+				cols, rows, affected, err := rd.ExecuteQuery(ctx, q)
 				logEntry.Duration = time.Since(logEntry.Timestamp)
 				logEntry.Operation = "REDIS"
 				if err != nil {
@@ -428,7 +455,7 @@ func (m Model) execQuery(q string) tea.Cmd {
 					m.queryLog.Add(logEntry)
 					return ErrMsg{Err: logEntry.Error}
 				}
-				cols, rows, affected, err := cd.ExecuteQuery(m.ctx, q)
+				cols, rows, affected, err := cd.ExecuteQuery(ctx, q)
 				logEntry.Duration = time.Since(logEntry.Timestamp)
 				logEntry.Operation = "CASSANDRA"
 				if err != nil {
@@ -446,7 +473,7 @@ func (m Model) execQuery(q string) tea.Cmd {
 		}
 
 		if isDestructiveQuery(q) {
-			res, execErr := m.driver.Exec(m.ctx, q)
+			res, execErr := m.driver.Exec(ctx, q)
 			logEntry.Duration = time.Since(logEntry.Timestamp)
 			if execErr != nil {
 				logEntry.Error = execErr
@@ -460,7 +487,7 @@ func (m Model) execQuery(q string) tea.Cmd {
 			return QueryResult{Affected: n}
 		}
 
-		rows, err := m.driver.Query(m.ctx, q)
+		rows, err := m.driver.Query(ctx, q)
 		if err == nil {
 			defer func() { _ = rows.Close() }()
 			cols, _ := rows.Columns()
@@ -471,8 +498,12 @@ func (m Model) execQuery(q string) tea.Cmd {
 				m.queryLog.Add(logEntry)
 				return QueryResult{Cols: cols, Rows: data, Affected: int64(len(data)), ScanErrs: scanErrs}
 			}
+			// Query succeeded but returned no columns — not an error
+			logEntry.Duration = time.Since(logEntry.Timestamp)
+			m.queryLog.Add(logEntry)
+			return QueryResult{Affected: 0}
 		}
-		res, execErr := m.driver.Exec(m.ctx, q)
+		res, execErr := m.driver.Exec(ctx, q)
 		logEntry.Duration = time.Since(logEntry.Timestamp)
 		if execErr != nil {
 			logEntry.Error = execErr

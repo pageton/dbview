@@ -86,12 +86,11 @@ func (m Model) viewTitle() string {
 	case ViewData:
 		label := m.activeTbl
 		if len(m.searches) > 0 {
-			filtered := m.filteredRows()
 			quoted := make([]string, len(m.searches))
 			for i, s := range m.searches {
 				quoted[i] = fmt.Sprintf("%q", s)
 			}
-			label = fmt.Sprintf("%s [%s] (%d/%d)", m.activeTbl, strings.Join(quoted, "+"), len(filtered), len(m.allRows))
+			label = fmt.Sprintf("%s [%s] (%d/%d)", m.activeTbl, strings.Join(quoted, "+"), len(m.filteredRowsCache), len(m.allRows))
 		}
 		return "Data · " + label
 	case ViewSchema:
@@ -696,8 +695,7 @@ func (m Model) renderSearch() string {
 	}
 	b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(cl.White)).Render(fmt.Sprintf(" /%s", renderInputWithCursor(m.searchInput, m.searchCursor))))
 	b.WriteString("\n")
-	filtered := m.filteredRows()
-	b.WriteString(theme.DimStyle(cl).Render(fmt.Sprintf(" %d/%d rows match", len(filtered), len(m.allRows))))
+	b.WriteString(theme.DimStyle(cl).Render(fmt.Sprintf(" %d/%d rows match", len(m.filteredRowsCache), len(m.allRows))))
 	b.WriteString("\n")
 	bs := theme.BorderedTable(cl)
 	b.WriteString(bs.Render(m.dataTbl.View()))
