@@ -20,7 +20,11 @@ func (d *SQLiteDriver) Open(ctx context.Context, dsn string) error {
 	if err != nil {
 		return fmt.Errorf("open sqlite: %w", err)
 	}
-	return d.db.PingContext(ctx)
+	if err := d.db.PingContext(ctx); err != nil {
+		return fmt.Errorf("open sqlite: %w", err)
+	}
+	d.db.SetMaxOpenConns(1)
+	return nil
 }
 
 func (d *SQLiteDriver) Close() error {
@@ -37,15 +41,15 @@ func (d *SQLiteDriver) ListTables(ctx context.Context) ([]string, error) {
 }
 
 func (d *SQLiteDriver) LoadSchema(ctx context.Context, table string) ([]ColInfo, error) {
-	return LoadSchema(d.db, table), nil
+	return LoadSchema(ctx, d.db, table), nil
 }
 
 func (d *SQLiteDriver) LoadFKs(ctx context.Context, table string) ([]FKInfo, error) {
-	return LoadFKs(d.db, table), nil
+	return LoadFKs(ctx, d.db, table), nil
 }
 
 func (d *SQLiteDriver) LoadIndices(ctx context.Context, table string) ([]IndexInfo, error) {
-	return LoadIndices(d.db, table), nil
+	return LoadIndices(ctx, d.db, table), nil
 }
 
 func (d *SQLiteDriver) Query(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error) {
@@ -70,7 +74,7 @@ func (d *SQLiteDriver) DB() *sql.DB { return d.db }
 
 func (d *SQLiteDriver) LoadTableData(ctx context.Context, table string, page, pageSize int) (cols []string, rows [][]string, total int, err error) {
 	// Get column names from schema
-	schema := LoadSchema(d.db, table)
+	schema := LoadSchema(ctx, d.db, table)
 	cols = ColNames(schema)
 	colExpr := ColSelectExpr(schema)
 

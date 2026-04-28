@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strings"
@@ -32,8 +33,8 @@ type IndexInfo struct {
 }
 
 // LoadSchema loads column metadata for the given SQLite table.
-func LoadSchema(db *sql.DB, tbl string) []ColInfo {
-	rows, err := db.Query(fmt.Sprintf("PRAGMA table_info(\"%s\")", strings.ReplaceAll(tbl, `"`, `""`)))
+func LoadSchema(ctx context.Context, db *sql.DB, tbl string) []ColInfo {
+	rows, err := db.QueryContext(ctx, fmt.Sprintf("PRAGMA table_info(\"%s\")", strings.ReplaceAll(tbl, `"`, `""`)))
 	if err != nil {
 		return nil
 	}
@@ -52,8 +53,8 @@ func LoadSchema(db *sql.DB, tbl string) []ColInfo {
 }
 
 // LoadFKs loads foreign key information for the given SQLite table.
-func LoadFKs(db *sql.DB, tbl string) []FKInfo {
-	rows, err := db.Query(fmt.Sprintf("PRAGMA foreign_key_list(\"%s\")", strings.ReplaceAll(tbl, `"`, `""`)))
+func LoadFKs(ctx context.Context, db *sql.DB, tbl string) []FKInfo {
+	rows, err := db.QueryContext(ctx, fmt.Sprintf("PRAGMA foreign_key_list(\"%s\")", strings.ReplaceAll(tbl, `"`, `""`)))
 	if err != nil {
 		return nil
 	}
@@ -69,8 +70,8 @@ func LoadFKs(db *sql.DB, tbl string) []FKInfo {
 }
 
 // LoadIndices loads index information for the given SQLite table.
-func LoadIndices(db *sql.DB, tbl string) []IndexInfo {
-	rows, err := db.Query(fmt.Sprintf("PRAGMA index_list(\"%s\")", strings.ReplaceAll(tbl, `"`, `""`)))
+func LoadIndices(ctx context.Context, db *sql.DB, tbl string) []IndexInfo {
+	rows, err := db.QueryContext(ctx, fmt.Sprintf("PRAGMA index_list(\"%s\")", strings.ReplaceAll(tbl, `"`, `""`)))
 	if err != nil {
 		return nil
 	}
@@ -87,7 +88,7 @@ func LoadIndices(db *sql.DB, tbl string) []IndexInfo {
 		}
 		idx := IndexInfo{Name: name, Unique: unique == 1}
 		// Load columns for this index
-		cr, err := db.Query(fmt.Sprintf("PRAGMA index_info(\"%s\")", strings.ReplaceAll(name, `"`, `""`)))
+		cr, err := db.QueryContext(ctx, fmt.Sprintf("PRAGMA index_info(\"%s\")", strings.ReplaceAll(name, `"`, `""`)))
 		if err == nil {
 			for cr.Next() {
 				var rank int
@@ -149,7 +150,7 @@ func HasPK(schema []ColInfo) bool {
 
 // ColNames extracts column names from schema info.
 func ColNames(schema []ColInfo) []string {
-	var names []string
+	names := make([]string, 0, len(schema))
 	for _, c := range schema {
 		names = append(names, c.Name)
 	}
@@ -189,12 +190,12 @@ func ListTables(db *sql.DB) ([]string, error) {
 }
 
 // LoadAllSchema loads schema and FK info for all given tables.
-func LoadAllSchema(db *sql.DB, tables []string) (map[string][]ColInfo, map[string][]FKInfo) {
+func LoadAllSchema(ctx context.Context, db *sql.DB, tables []string) (map[string][]ColInfo, map[string][]FKInfo) {
 	schema := make(map[string][]ColInfo)
 	fks := make(map[string][]FKInfo)
 	for _, name := range tables {
-		schema[name] = LoadSchema(db, name)
-		fks[name] = LoadFKs(db, name)
+		schema[name] = LoadSchema(ctx, db, name)
+		fks[name] = LoadFKs(ctx, db, name)
 	}
 	return schema, fks
 }
