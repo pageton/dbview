@@ -3,6 +3,7 @@ package table
 import (
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/pageton/dbview/internal/theme"
 
@@ -12,10 +13,10 @@ import (
 
 // Trunc truncates s to max runes, appending "..." if truncated.
 func Trunc(s string, max int) string {
-	runes := []rune(s)
-	if len(runes) <= max {
+	if utf8.RuneCountInString(s) <= max {
 		return s
 	}
+	runes := []rune(s)
 	if max <= 3 {
 		return string(runes[:max])
 	}
@@ -26,13 +27,13 @@ func Trunc(s string, max int) string {
 // inserting "…" in the middle. Useful for column headers where the
 // suffix often contains the most distinguishing part (e.g., _id, _hash).
 func TruncMiddle(s string, max int) string {
-	runes := []rune(s)
-	if len(runes) <= max {
+	if utf8.RuneCountInString(s) <= max {
 		return s
 	}
 	if max <= 5 {
 		return Trunc(s, max)
 	}
+	runes := []rune(s)
 	half := (max - 1) / 2
 	return string(runes[:half]) + "…" + string(runes[len(runes)-(max-half-1):])
 }
@@ -96,11 +97,26 @@ func CalcColWidths(cols []string, rows [][]string, avail int) []table.Column {
 	}
 	if total > avail {
 		over := total - avail
-		for over > 0 {
+		shrinkable := 0
+		for _, w := range widths {
+			if w > minW {
+				shrinkable++
+			}
+		}
+		if shrinkable > 0 {
+			base := over / shrinkable
+			extra := over % shrinkable
 			for i := range widths {
-				if widths[i] > minW && over > 0 {
-					widths[i]--
-					over--
+				if widths[i] > minW {
+					take := base
+					if extra > 0 {
+						take++
+						extra--
+					}
+					if take > widths[i]-minW {
+						take = widths[i] - minW
+					}
+					widths[i] -= take
 				}
 			}
 		}
@@ -124,11 +140,15 @@ func FilteredRows(allRows [][]string, searches []string) [][]string {
 	}
 	var out [][]string
 	for _, row := range allRows {
+		lowered := make([]string, len(row))
+		for i, cell := range row {
+			lowered[i] = strings.ToLower(cell)
+		}
 		match := true
 		for _, term := range terms {
 			found := false
-			for _, cell := range row {
-				if strings.Contains(strings.ToLower(cell), term) {
+			for _, lc := range lowered {
+				if strings.Contains(lc, term) {
 					found = true
 					break
 				}
@@ -152,12 +172,14 @@ func SortedRows(rows [][]string, sortCol int, sortAsc bool, dataColsLen int) [][
 	}
 	sorted := make([][]string, len(rows))
 	copy(sorted, rows)
-	sort.SliceStable(sorted, func(i, j int) bool {
-		a, b := sorted[i], sorted[j]
-		if sortCol >= len(a) || sortCol >= len(b) {
-			return false
+	loweredCol := make([]string, len(sorted))
+	for i, row := range sorted {
+		if sortCol < len(row) {
+			loweredCol[i] = strings.ToLower(row[sortCol])
 		}
-		cmp := strings.Compare(strings.ToLower(a[sortCol]), strings.ToLower(b[sortCol]))
+	}
+	sort.SliceStable(sorted, func(i, j int) bool {
+		cmp := strings.Compare(loweredCol[i], loweredCol[j])
 		if sortAsc {
 			return cmp < 0
 		}
