@@ -123,14 +123,18 @@ type QueryLog struct {
 
 // NewQueryLog creates a new QueryLog with default max size 100.
 func NewQueryLog() QueryLog {
-	return QueryLog{MaxSize: 100}
+	return QueryLog{
+		Entries: make([]QueryLogEntry, 0, 100),
+		MaxSize: 100,
+	}
 }
 
 // Add appends an entry to the log, evicting oldest if at capacity.
 func (l *QueryLog) Add(entry QueryLogEntry) {
 	l.Entries = append(l.Entries, entry)
 	if len(l.Entries) > l.MaxSize {
-		l.Entries = l.Entries[len(l.Entries)-l.MaxSize:]
+		copy(l.Entries, l.Entries[len(l.Entries)-l.MaxSize:])
+		l.Entries = l.Entries[:l.MaxSize]
 	}
 }
 
